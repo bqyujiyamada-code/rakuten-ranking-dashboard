@@ -7,8 +7,14 @@ import type {
   RankingItem,
 } from "@/lib/rakuten/types";
 
+// 2026年のインフラ移行に伴い、旧 app.rakuten.co.jp/services/api/... から
+// openapi.rakuten.co.jp/ichibaranking/api/... へ変更 (applicationId に加え accessKey も必須)
 const RANKING_ENDPOINT =
-  "https://app.rakuten.co.jp/services/api/IchibaItem/Ranking/20220601";
+  "https://openapi.rakuten.co.jp/ichibaranking/api/IchibaItem/Ranking/20220601";
+
+// 楽天アプリ登録時に「許可されたWebサイト」として申請したドメイン。
+// 新エンドポイントは Referer/Origin ヘッダーがこのドメインと一致することを要求する。
+const SITE_ORIGIN = "https://rakuten-ranking-dashboard.vercel.app";
 
 // 楽天APIのレート制限 (概ね1リクエスト/秒) を踏まえた、複数ジャンル取得時のインターバル
 const REQUEST_INTERVAL_MS = 1100;
@@ -25,16 +31,24 @@ export interface FetchGenreRankingOptions {
 export async function fetchGenreRanking({
   genreId,
   page = 1,
-  period = "daily",
+  period = "realtime",
 }: FetchGenreRankingOptions): Promise<RankingItem[]> {
   const url = new URL(RANKING_ENDPOINT);
   url.searchParams.set("format", "json");
   url.searchParams.set("applicationId", env.rakuten.applicationId);
+  url.searchParams.set("accessKey", env.rakuten.accessKey);
   url.searchParams.set("genreId", genreId);
   url.searchParams.set("page", String(page));
   url.searchParams.set("period", period);
 
-  const res = await fetch(url.toString(), { cache: "no-store" });
+  const res = await fetch(url.toString(), {
+    cache: "no-store",
+    headers: {
+      // genreId指定時は realtime 以外だと wrong_parameter になる (2026年新API仕様で確認済み)
+      Referer: `${SITE_ORIGIN}/`,
+      Origin: SITE_ORIGIN,
+    },
+  });
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");

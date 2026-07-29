@@ -17,6 +17,10 @@ export const env = {
     get applicationId(): string {
       return required("RAKUTEN_APP_ID");
     },
+    // 2026年のインフラ移行 (openapi.rakuten.co.jp) 後は applicationId に加えて必須
+    get accessKey(): string {
+      return required("RAKUTEN_ACCESS_KEY");
+    },
   },
   gemini: {
     get apiKey(): string {
