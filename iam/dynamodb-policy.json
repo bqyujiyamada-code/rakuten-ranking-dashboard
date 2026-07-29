@@ -1,0 +1,28 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RakutenRankingsTableSetup",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:CreateTable",
+        "dynamodb:DescribeTable"
+      ],
+      "Resource": "arn:aws:dynamodb:ap-northeast-1:<AWS_ACCOUNT_ID>:table/RakutenRankings"
+    },
+    {
+      "Sid": "RakutenRankingsRuntimeAccess",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:BatchWriteItem",
+        "dynamodb:Query"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:ap-northeast-1:<AWS_ACCOUNT_ID>:table/RakutenRankings",
+        "arn:aws:dynamodb:ap-northeast-1:<AWS_ACCOUNT_ID>:table/RakutenRankings/index/GSI1_GenreTimestamp"
+      ]
+    }
+  ]
+}
