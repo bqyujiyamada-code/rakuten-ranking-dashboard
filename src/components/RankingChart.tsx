@@ -3,7 +3,6 @@
 import { format } from "date-fns";
 import {
   CartesianGrid,
-  Legend,
   Line,
   LineChart,
   ResponsiveContainer,
@@ -62,7 +61,7 @@ function CustomTooltip({
   if (!active || !payload || payload.length === 0) return null;
 
   return (
-    <div className="rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-1)] px-3 py-2 text-xs shadow-sm">
+    <div className="max-w-xs rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-1)] px-3 py-2 text-xs shadow-sm">
       <div className="mb-1 text-[var(--text-muted)]">{label ? formatTick(label) : ""}</div>
       <div className="flex flex-col gap-1">
         {payload
@@ -77,16 +76,59 @@ function CustomTooltip({
                   style={{ backgroundColor: s.color }}
                   aria-hidden
                 />
-                <span className="font-semibold tabular-nums text-[var(--text-primary)]">
+                <span className="shrink-0 font-semibold tabular-nums text-[var(--text-primary)]">
                   {valuePrefix}
                   {entry.value}
                   {valueSuffix}
                 </span>
-                <span className="line-clamp-1 text-[var(--text-secondary)]">{s.itemName}</span>
+                <span className="truncate text-[var(--text-secondary)]">{s.itemName}</span>
               </div>
             );
           })}
       </div>
+    </div>
+  );
+}
+
+/**
+ * 選択中シリーズの凡例。Rechartsの<Legend>は商品名(数十〜100文字超)を
+ * 折り返し表示してしまいレイアウトが崩れるため使わず、
+ * 省略表示+クリックで選択解除できる独自の凡例に置き換えている。
+ */
+function ChartLegend({
+  series,
+  onRemove,
+}: {
+  series: ChartSeries[];
+  onRemove?: (itemCode: string) => void;
+}) {
+  // 単一系列の場合は色を判別する必要がなく、グラフタイトルが既に対象を示しているため凡例は不要
+  if (series.length <= 1) return null;
+
+  return (
+    <div className="mb-3 flex flex-wrap gap-2">
+      {series.map((s) => (
+        <button
+          key={s.itemCode}
+          type="button"
+          onClick={() => onRemove?.(s.itemCode)}
+          title={s.itemName}
+          aria-label={`${s.itemName} を比較から外す`}
+          className="flex max-w-[220px] items-center gap-1.5 rounded-full border border-[var(--border-hairline)] bg-[var(--surface-2)] px-2.5 py-1 text-xs text-[var(--text-secondary)] transition-colors hover:border-[var(--baseline)]"
+        >
+          <span
+            className="h-2 w-2 shrink-0 rounded-full"
+            style={{ backgroundColor: s.color }}
+            aria-hidden
+          />
+          <span className="truncate">{s.itemName}</span>
+          {onRemove && (
+            <span className="shrink-0 text-[var(--text-muted)]" aria-hidden>
+              ×
+            </span>
+          )}
+        </button>
+      ))}
     </div>
   );
 }
@@ -105,7 +147,6 @@ function TrendLineChart({
   valueSuffix?: string;
 }) {
   const data = mergeSeries(series, field);
-  const showLegend = series.length > 1;
 
   return (
     <ResponsiveContainer width="100%" height={260}>
@@ -130,17 +171,6 @@ function TrendLineChart({
             <CustomTooltip series={series} valuePrefix={valuePrefix} valueSuffix={valueSuffix} />
           }
         />
-        {showLegend && (
-          <Legend
-            wrapperStyle={{ fontSize: 12, color: "var(--text-secondary)" }}
-            formatter={(_value, entry) => {
-              const s = series.find((item) => item.itemCode === (entry as { dataKey?: string }).dataKey);
-              return (
-                <span style={{ color: "var(--text-secondary)" }}>{s?.itemName ?? ""}</span>
-              );
-            }}
-          />
-        )}
         {series.map((s) => (
           <Line
             key={s.itemCode}
@@ -160,7 +190,13 @@ function TrendLineChart({
   );
 }
 
-export function RankingChart({ series }: { series: ChartSeries[] }) {
+export function RankingChart({
+  series,
+  onRemoveItem,
+}: {
+  series: ChartSeries[];
+  onRemoveItem?: (itemCode: string) => void;
+}) {
   if (series.length === 0) {
     return (
       <div className="flex h-64 items-center justify-center rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-1)] text-sm text-[var(--text-muted)]">
@@ -170,16 +206,19 @@ export function RankingChart({ series }: { series: ChartSeries[] }) {
   }
 
   return (
-    <div className="grid gap-6 md:grid-cols-2">
-      <div className="rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-1)] p-4">
-        <h3 className="mb-2 text-sm font-semibold text-[var(--text-primary)]">
-          順位の推移 <span className="font-normal text-[var(--text-muted)]">(上ほど高順位)</span>
-        </h3>
-        <TrendLineChart series={series} field="rank" reversed valueSuffix="位" />
-      </div>
-      <div className="rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-1)] p-4">
-        <h3 className="mb-2 text-sm font-semibold text-[var(--text-primary)]">価格の推移</h3>
-        <TrendLineChart series={series} field="price" valuePrefix="¥" />
+    <div className="rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-1)] p-4">
+      <ChartLegend series={series} onRemove={onRemoveItem} />
+      <div className="grid gap-6 md:grid-cols-2">
+        <div>
+          <h3 className="mb-2 text-sm font-semibold text-[var(--text-primary)]">
+            順位の推移 <span className="font-normal text-[var(--text-muted)]">(上ほど高順位)</span>
+          </h3>
+          <TrendLineChart series={series} field="rank" reversed valueSuffix="位" />
+        </div>
+        <div>
+          <h3 className="mb-2 text-sm font-semibold text-[var(--text-primary)]">価格の推移</h3>
+          <TrendLineChart series={series} field="price" valuePrefix="¥" />
+        </div>
       </div>
     </div>
   );

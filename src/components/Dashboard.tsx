@@ -210,24 +210,21 @@ export function Dashboard() {
       />
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-        <div className="flex flex-col gap-4">
-          <div>
-            <h2 className="mb-2 text-sm font-semibold text-[var(--text-primary)]">
-              {selectedGenreName ? `${selectedGenreName}のランキング` : "ランキング"}
-              <span className="ml-2 font-normal text-[var(--text-muted)]">
-                (最大{MAX_SELECTED_ITEMS}件まで比較可能)
-              </span>
-            </h2>
-            <RankingLeaderboard
-              items={leaderboard}
-              selectedItemCodes={selectedItemCodes}
-              colorFor={(itemCode) => colorAssignments[itemCode]}
-              onToggle={handleToggleItem}
-              maxSelected={MAX_SELECTED_ITEMS}
-              isLoading={isLeaderboardLoading}
-            />
-          </div>
-          <RankingChart series={chartSeries} />
+        <div>
+          <h2 className="mb-2 text-sm font-semibold text-[var(--text-primary)]">
+            {selectedGenreName ? `${selectedGenreName}のランキング` : "ランキング"}
+            <span className="ml-2 font-normal text-[var(--text-muted)]">
+              (最大{MAX_SELECTED_ITEMS}件まで比較可能)
+            </span>
+          </h2>
+          <RankingLeaderboard
+            items={leaderboard}
+            selectedItemCodes={selectedItemCodes}
+            colorFor={(itemCode) => colorAssignments[itemCode]}
+            onToggle={handleToggleItem}
+            maxSelected={MAX_SELECTED_ITEMS}
+            isLoading={isLeaderboardLoading}
+          />
         </div>
 
         <div className="flex flex-col gap-4">
@@ -245,6 +242,9 @@ export function Dashboard() {
           )}
         </div>
       </div>
+
+      {/* グラフは商品名の凡例が長くなるため、狭い列に収めず全幅で表示する */}
+      <RankingChart series={chartSeries} onRemoveItem={handleToggleItem} />
     </div>
   );
 }
