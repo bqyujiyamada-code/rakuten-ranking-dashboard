@@ -3,6 +3,7 @@ import { fetchGenreRanking } from "@/lib/rakuten/client";
 import {
   advanceGenreMeta,
   getGenreMeta,
+  getLatestInsight,
   getSnapshotAtTimestamp,
   putInsight,
   putRankingSnapshot,
@@ -47,10 +48,17 @@ export async function collectAndAnalyzeGenre(
   let aiAnalysisGenerated = false;
   if (highlights.length > 0) {
     try {
+      const previousInsight = await getLatestInsight(genre.genreId);
       const { trendAnalysisText, forecastText } = await generateTrendInsight(
         genre.name,
         highlights,
         new Date(timestamp),
+        previousInsight
+          ? {
+              trendAnalysisText: previousInsight.aiAnalysisText,
+              forecastText: previousInsight.forecastText,
+            }
+          : null,
       );
       await putInsight(genre.genreId, timestamp, trendAnalysisText, forecastText, highlights);
       aiAnalysisGenerated = true;

@@ -66,58 +66,82 @@ export function InsightCard({
   isLatest?: boolean;
 }) {
   return (
-    <div className="rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-1)] p-5">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="text-xs text-[var(--text-muted)]">
-          {formatDateTime(insight.timestamp)} 時点の分析
-        </span>
-        {isLatest && (
-          <span
-            className="rounded-full px-2 py-0.5 text-xs font-medium text-white"
-            style={{ backgroundColor: "var(--series-1)" }}
-          >
-            最新
+    <details
+      open={isLatest}
+      className="group rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-1)]"
+    >
+      <summary
+        className="flex cursor-pointer list-none items-center justify-between gap-2 p-5 [&::-webkit-details-marker]:hidden group-open:pb-3"
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="shrink-0 text-xs text-[var(--text-muted)]">
+            {formatDateTime(insight.timestamp)} 時点の分析
           </span>
+          {isLatest && (
+            <span
+              className="shrink-0 rounded-full px-2 py-0.5 text-xs font-medium text-white"
+              style={{ backgroundColor: "var(--series-1)" }}
+            >
+              最新
+            </span>
+          )}
+          <span className="truncate text-xs text-[var(--text-muted)] group-open:hidden">
+            {insight.aiAnalysisText}
+          </span>
+        </span>
+        <svg
+          className="size-4 shrink-0 text-[var(--text-muted)] transition-transform group-open:rotate-180"
+          viewBox="0 0 20 20"
+          fill="currentColor"
+          aria-hidden="true"
+        >
+          <path
+            fillRule="evenodd"
+            d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
+            clipRule="evenodd"
+          />
+        </svg>
+      </summary>
+
+      <div className="px-5 pb-5">
+        <p className="mb-3 text-sm leading-relaxed text-[var(--text-primary)]">
+          {insight.aiAnalysisText}
+        </p>
+
+        {insight.forecastText && (
+          <div className="mb-3 rounded-lg border border-dashed border-[var(--border-hairline)] bg-[var(--surface-2)] p-3">
+            <p className="mb-1 text-xs font-medium text-[var(--text-muted)]">
+              🔮 今後の予測
+            </p>
+            <p className="text-sm leading-relaxed text-[var(--text-primary)]">
+              {insight.forecastText}
+            </p>
+          </div>
+        )}
+
+        {insight.highlights.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {insight.highlights.map((highlight, index) => {
+              const meta = HIGHLIGHT_META[highlight.type];
+              const movement = movementLabel(highlight);
+              return (
+                <span
+                  key={`${highlight.itemCode}-${index}`}
+                  className="inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-xs"
+                  style={{ borderColor: meta.color, color: meta.color }}
+                  title={`${highlight.itemName} — ${highlight.detail}`}
+                >
+                  <span className="shrink-0">{meta.label}</span>
+                  {movement && (
+                    <span className="shrink-0 font-semibold tabular-nums">{movement}</span>
+                  )}
+                  <span className="truncate">{displayItemName(highlight.itemName)}</span>
+                </span>
+              );
+            })}
+          </div>
         )}
       </div>
-
-      <p className="mb-3 text-sm leading-relaxed text-[var(--text-primary)]">
-        {insight.aiAnalysisText}
-      </p>
-
-      {insight.forecastText && (
-        <div className="mb-3 rounded-lg border border-dashed border-[var(--border-hairline)] bg-[var(--surface-2)] p-3">
-          <p className="mb-1 text-xs font-medium text-[var(--text-muted)]">
-            🔮 今後の予測
-          </p>
-          <p className="text-sm leading-relaxed text-[var(--text-primary)]">
-            {insight.forecastText}
-          </p>
-        </div>
-      )}
-
-      {insight.highlights.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {insight.highlights.map((highlight, index) => {
-            const meta = HIGHLIGHT_META[highlight.type];
-            const movement = movementLabel(highlight);
-            return (
-              <span
-                key={`${highlight.itemCode}-${index}`}
-                className="inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-xs"
-                style={{ borderColor: meta.color, color: meta.color }}
-                title={`${highlight.itemName} — ${highlight.detail}`}
-              >
-                <span className="shrink-0">{meta.label}</span>
-                {movement && (
-                  <span className="shrink-0 font-semibold tabular-nums">{movement}</span>
-                )}
-                <span className="truncate">{displayItemName(highlight.itemName)}</span>
-              </span>
-            );
-          })}
-        </div>
-      )}
-    </div>
+    </details>
   );
 }

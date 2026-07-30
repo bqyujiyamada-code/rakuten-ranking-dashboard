@@ -36,22 +36,41 @@ const JST_DATE_FORMATTER = new Intl.DateTimeFormat("ja-JP", {
   weekday: "long",
 });
 
+export interface PreviousInsight {
+  trendAnalysisText: string;
+  forecastText?: string;
+}
+
 function buildPrompt(
   genreName: string,
   highlights: DiffHighlightRecord[],
   collectedAt: Date,
+  previousInsight: PreviousInsight | null,
 ): string {
   const bulletList = highlights
     .map((h, i) => `${i + 1}. [${h.type}] ${h.itemName} — ${h.detail}`)
     .join("\n");
   const todayLabel = JST_DATE_FORMATTER.format(collectedAt);
 
+  const continuitySection = previousInsight
+    ? `
+## 前回分析(参考・連続性のため)
+前回のtrendAnalysis: ${previousInsight.trendAnalysisText}
+前回のforecast: ${previousInsight.forecastText ?? "(記録なし)"}
+
+上記は前回収集時点の分析です。今回の変動が前回の続きなのか、方向転換したのか、
+特に動きがないのかを意識して書いてください。前回の文章をそのまま繰り返さず、
+今回新たに分かったこと・変化した点を中心に書くこと。目立った変化がなければ
+「前回からの傾向に大きな変化はない」のように正直に書いてよい。
+`
+    : "";
+
   return `あなたは楽天市場のトレンドを分析するECマーケットアナリストです。
 本日の日付は${todayLabel}(日本時間)です。以下は「${genreName}」ジャンルの楽天ランキングにおける、
 前回計測時からの主な変動点です。
 
 ${bulletList}
-
+${continuitySection}
 分析にあたっては、以下の点に注意してください。
 - 商品名には「お中元」「セール」「今だけ」等の販促・SEO目的のキーワードが実際の時期と関係なく
   含まれていることが多い。本日の日付と照らして時期的に妥当かどうかを必ず確認し、季節性を
@@ -85,9 +104,10 @@ export async function generateTrendInsight(
   genreName: string,
   highlights: DiffHighlightRecord[],
   collectedAt: Date = new Date(),
+  previousInsight: PreviousInsight | null = null,
 ): Promise<TrendInsightResult> {
   const ai = getClient();
-  const prompt = buildPrompt(genreName, highlights, collectedAt);
+  const prompt = buildPrompt(genreName, highlights, collectedAt, previousInsight);
 
   const response = await ai.models.generateContent({
     model: MODEL,
