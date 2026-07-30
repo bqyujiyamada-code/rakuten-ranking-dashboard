@@ -19,6 +19,7 @@ export async function GET(request: Request) {
       insights: insights.map((insight) => ({
         timestamp: insight.timestamp,
         aiAnalysisText: insight.aiAnalysisText,
+        forecastText: insight.forecastText ?? null,
         highlights: insight.highlights,
         createdAt: insight.createdAt,
       })),

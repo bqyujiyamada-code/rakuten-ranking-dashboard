@@ -188,6 +188,7 @@ export async function putInsight(
   genreId: string,
   timestamp: string,
   aiAnalysisText: string,
+  forecastText: string,
   highlights: DiffHighlightRecord[],
 ): Promise<void> {
   const item: InsightItem = {
@@ -197,6 +198,7 @@ export async function putInsight(
     genreId,
     timestamp,
     aiAnalysisText,
+    forecastText,
     highlights,
     createdAt: new Date().toISOString(),
   };

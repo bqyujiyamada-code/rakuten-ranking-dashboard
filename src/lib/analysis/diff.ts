@@ -11,6 +11,10 @@ export const DIFF_THRESHOLDS = {
 } as const;
 
 const MAX_HIGHLIGHTS = 8;
+// 楽天のリアルタイムランキングは母数が小さいジャンルほど日次の総入れ替わりが激しく、
+// 新規ランクインだけで8枠が埋まりやすい。ランク上昇/下降・価格変動の枠を確保するため、
+// 新規ランクインは最大でもこの件数までに抑え、残り枠を他の変動タイプに割り当てる。
+const MAX_NEW_ENTRY_HIGHLIGHTS = 4;
 
 /**
  * 今回取得したランキングと前回スナップショットを比較し、
@@ -89,7 +93,38 @@ export function detectDiffHighlights(
     }
   }
 
-  return sortBySignificance(highlights).slice(0, MAX_HIGHLIGHTS);
+  return selectDiverseHighlights(highlights);
+}
+
+/**
+ * 新規ランクインが件数で他タイプを圧倒しないよう、新規ランクインの採用数に上限を設けた上で
+ * MAX_HIGHLIGHTS件を選ぶ。他タイプの候補が少ない場合は余った枠を新規ランクインで埋める。
+ */
+function selectDiverseHighlights(
+  highlights: DiffHighlightRecord[],
+): DiffHighlightRecord[] {
+  const sorted = sortBySignificance(highlights);
+  const newEntries = sorted.filter((h) => h.type === "NEW_ENTRY");
+  const others = sorted.filter((h) => h.type !== "NEW_ENTRY");
+
+  const selectedNewEntries = newEntries.slice(0, MAX_NEW_ENTRY_HIGHLIGHTS);
+  const selectedOthers = others.slice(0, MAX_HIGHLIGHTS - selectedNewEntries.length);
+
+  const leftoverSlots =
+    MAX_HIGHLIGHTS - selectedNewEntries.length - selectedOthers.length;
+  const extraNewEntries =
+    leftoverSlots > 0
+      ? newEntries.slice(
+          selectedNewEntries.length,
+          selectedNewEntries.length + leftoverSlots,
+        )
+      : [];
+
+  return sortBySignificance([
+    ...selectedNewEntries,
+    ...selectedOthers,
+    ...extraNewEntries,
+  ]);
 }
 
 function significanceWeight(highlight: DiffHighlightRecord): number {

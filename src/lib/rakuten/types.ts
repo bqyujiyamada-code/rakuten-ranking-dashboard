@@ -2,7 +2,8 @@
 export interface RakutenRankingRawItem {
   itemName: string;
   itemCode: string;
-  itemPrice: number;
+  // 2026年移行後の新エンドポイントは itemPrice を文字列で返すことがある (client.ts で Number() 変換する)
+  itemPrice: number | string;
   itemUrl: string;
   shopName?: string;
   reviewCount?: number;

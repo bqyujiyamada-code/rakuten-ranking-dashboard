@@ -1,6 +1,7 @@
 "use client";
 
 import { format } from "date-fns";
+import { displayItemName } from "@/lib/format/itemName";
 import {
   CartesianGrid,
   Line,
@@ -43,6 +44,8 @@ function formatTick(timestamp: string) {
   }
 }
 
+const numberFormatter = new Intl.NumberFormat("ja-JP");
+
 function CustomTooltip({
   active,
   payload,
@@ -78,10 +81,12 @@ function CustomTooltip({
                 />
                 <span className="shrink-0 font-semibold tabular-nums text-[var(--text-primary)]">
                   {valuePrefix}
-                  {entry.value}
+                  {numberFormatter.format(entry.value ?? 0)}
                   {valueSuffix}
                 </span>
-                <span className="truncate text-[var(--text-secondary)]">{s.itemName}</span>
+                <span className="truncate text-[var(--text-secondary)]" title={s.itemName}>
+                  {displayItemName(s.itemName)}
+                </span>
               </div>
             );
           })}
@@ -121,7 +126,7 @@ function ChartLegend({
             style={{ backgroundColor: s.color }}
             aria-hidden
           />
-          <span className="truncate">{s.itemName}</span>
+          <span className="truncate">{displayItemName(s.itemName)}</span>
           {onRemove && (
             <span className="shrink-0 text-[var(--text-muted)]" aria-hidden>
               ×

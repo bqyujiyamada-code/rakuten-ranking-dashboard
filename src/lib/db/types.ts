@@ -54,6 +54,7 @@ export interface InsightItem {
   genreId: string;
   timestamp: string;
   aiAnalysisText: string;
+  forecastText?: string;
   highlights: DiffHighlightRecord[];
   createdAt: string;
 }

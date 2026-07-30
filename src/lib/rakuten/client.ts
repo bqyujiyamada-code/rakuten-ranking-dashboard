@@ -64,7 +64,7 @@ export async function fetchGenreRanking({
     itemCode: Item.itemCode,
     itemName: Item.itemName,
     rank: Item.rank,
-    price: Item.itemPrice,
+    price: Number(Item.itemPrice),
     itemUrl: Item.itemUrl,
     imageUrl: Item.mediumImageUrls?.[0]?.imageUrl,
     shopName: Item.shopName,

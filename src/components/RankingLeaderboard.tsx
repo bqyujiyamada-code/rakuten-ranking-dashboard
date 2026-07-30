@@ -1,5 +1,7 @@
 "use client";
 
+import { displayItemName } from "@/lib/format/itemName";
+
 export interface LeaderboardItem {
   itemCode: string;
   itemName: string;
@@ -94,7 +96,7 @@ export function RankingLeaderboard({
                       className="line-clamp-1 hover:underline"
                       title={item.itemName}
                     >
-                      {item.itemName}
+                      {displayItemName(item.itemName)}
                     </a>
                   </div>
                   {item.shopName && (

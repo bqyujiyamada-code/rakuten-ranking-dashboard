@@ -47,8 +47,12 @@ export async function collectAndAnalyzeGenre(
   let aiAnalysisGenerated = false;
   if (highlights.length > 0) {
     try {
-      const aiAnalysisText = await generateTrendInsight(genre.name, highlights);
-      await putInsight(genre.genreId, timestamp, aiAnalysisText, highlights);
+      const { trendAnalysisText, forecastText } = await generateTrendInsight(
+        genre.name,
+        highlights,
+        new Date(timestamp),
+      );
+      await putInsight(genre.genreId, timestamp, trendAnalysisText, forecastText, highlights);
       aiAnalysisGenerated = true;
     } catch (error) {
       console.error(
