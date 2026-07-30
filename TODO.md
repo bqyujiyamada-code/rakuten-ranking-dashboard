@@ -128,11 +128,22 @@ Playwright(ヘッドレスChromium)で本番DBに繋いだdevサーバーを操�
   一切変更せず、hoverの`title`で常に確認できる。
 - ついでに`RankingChart`のツールチップに価格の桁区切り表示(`Intl.NumberFormat`)を追加。
 
+### 18. 対応15〜17のコミット・本番デプロイ
+- コミット `0d9dcfd`("Add AI forecast insight and fix data quality issues found in production review")を
+  `main` にpush済み。Vercelが自動ビルド・デプロイし、`rakuten-ranking-dashboard.vercel.app` の
+  エイリアスが新デプロイ(`dpl_AqUBjxF3sEtRF8odLqQsrPQgkMYi`)に切り替わったことを`vercel inspect`で確認済み
+- Cronは `0 22 * * *`(UTC)= 毎日7:00 JST。2026-07-30 7:41 JSTの収集は本コミット反映前に実行済みのため、
+  `forecastText`を含む新ロジックが実際に使われるのは**次回の自動収集(2026-07-31 7:00 JST予定)から**
+- 過去に保存済みのインサイト(今回分含む)には`forecastText`は付与されない。付与されるのは
+  デプロイ後に新規生成されたインサイトのみ
+
 ## 未対応 (実運用前に必要)
 
 - [ ] `iam/dynamodb-policy.json` の `<AWS_ACCOUNT_ID>` を実際のアカウントIDに置き換えてIAMポリシーを作成・IAMユーザーにアタッチ(現在のIAMユーザーに実際にこの最小権限ポリシーが適用されているかは未確認)
 - [ ] `src/lib/rakuten/genres.ts` のgenreIdは実際のAPI呼び出しで全16件とも正常に動作することを確認済み(実データ取得成功)。ただし正式な `IchibaGenre/Search` によるジャンル名の突合はまだ行っていない
 - [x] 2回目以降の自動収集(2026-07-30 7:41 JST実行分)で、差分検知・AIインサイト生成が実際に機能するか確認 → 機能はしたが、生成された分析文・ハイライトの質に問題があり対応16.で修正済み
+- [ ] 次回の自動収集(2026-07-31 7:00 JST予定)で、`forecastText`(今後の予測)・日付グラウンディング・
+  ハイライト多様化・商品名クリーンアップが実データで意図通り機能するか確認
 - [ ] 対応16.で修正した価格Number変換より前に収集済みのレコード(`RankingSnapshotItem.price` / `DiffHighlightRecord.currentPrice`/`previousPrice`)は文字列のまま残っている。バックフィルが必要か検討(実害は今のところ確認されていない)
 - [ ] 本番運用を見据えたレート制限・リトライ・監視/アラートの調整
 - [ ] (任意) ユニットテスト・E2Eテストの追加

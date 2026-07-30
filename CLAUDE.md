@@ -161,6 +161,10 @@ Geminiに渡すハイライトは最大8件(`MAX_HIGHLIGHTS`)に絞っている�
   `vercel api /v9/projects/<project>` で`framework`フィールドを確認すること。
 - Cron Jobs (`vercel.json`)はHobbyプランのため1日1回まで。現在 `0 22 * * *` (UTC) = 毎日7:00 JST に
   `/api/cron/collect`を実行するよう設定・登録済み(`vercel crons ls`で確認可能)。
+  **収集・分析ロジック(`src/lib/analysis/`, `src/lib/collectAndAnalyze.ts`等)を変更してpushしても、
+  その日のCronが既に実行済みなら反映は翌日7:00 JSTになる。** 「直したはずなのに変わっていない」と
+  思ったら、まず該当ジャンルの最新インサイトのtimestampとデプロイ時刻の前後関係を確認すること。
+  デプロイ自体が成功しているかは `vercel ls` / `vercel inspect <url>` で確認できる。
 - ローカルは`vercel link`済み(`.vercel/project.json`が存在)。`vercel env ls production` /
   `vercel logs <url>` / `vercel inspect <url> --logs` で本番環境変数やログを直接確認できる。
 
