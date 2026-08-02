@@ -12,28 +12,10 @@ import {
   YAxis,
 } from "recharts";
 
-export interface ChartSeries {
+export interface ChartItem {
   itemCode: string;
   itemName: string;
-  color: string;
   points: { timestamp: string; rank: number; price: number }[];
-}
-
-type ChartField = "rank" | "price";
-
-function mergeSeries(series: ChartSeries[], field: ChartField) {
-  const timestamps = Array.from(
-    new Set(series.flatMap((s) => s.points.map((p) => p.timestamp))),
-  ).sort();
-
-  return timestamps.map((timestamp) => {
-    const row: Record<string, number | string> = { timestamp };
-    for (const s of series) {
-      const point = s.points.find((p) => p.timestamp === timestamp);
-      if (point) row[s.itemCode] = point[field];
-    }
-    return row;
-  });
 }
 
 function formatTick(timestamp: string) {
@@ -46,20 +28,17 @@ function formatTick(timestamp: string) {
 
 const numberFormatter = new Intl.NumberFormat("ja-JP");
 
+const RANK_COLOR = "var(--series-1)";
+const PRICE_COLOR = "var(--series-2)";
+
 function CustomTooltip({
   active,
   payload,
   label,
-  series,
-  valuePrefix,
-  valueSuffix,
 }: {
   active?: boolean;
   payload?: { dataKey?: string | number; value?: number }[];
   label?: string;
-  series: ChartSeries[];
-  valuePrefix?: string;
-  valueSuffix?: string;
 }) {
   if (!active || !payload || payload.length === 0) return null;
 
@@ -70,23 +49,22 @@ function CustomTooltip({
         {payload
           .filter((entry) => entry.value !== undefined)
           .map((entry) => {
-            const s = series.find((item) => item.itemCode === entry.dataKey);
-            if (!s) return null;
+            const isRank = entry.dataKey === "rank";
+            const color = isRank ? RANK_COLOR : PRICE_COLOR;
+            const formatted = isRank
+              ? `${entry.value}位`
+              : `¥${numberFormatter.format(entry.value ?? 0)}`;
             return (
-              <div key={s.itemCode} className="flex items-center gap-2">
+              <div key={String(entry.dataKey)} className="flex items-center gap-2">
                 <span
                   className="inline-block h-0.5 w-3 shrink-0 rounded-full"
-                  style={{ backgroundColor: s.color }}
+                  style={{ backgroundColor: color }}
                   aria-hidden
                 />
                 <span className="shrink-0 font-semibold tabular-nums text-[var(--text-primary)]">
-                  {valuePrefix}
-                  {numberFormatter.format(entry.value ?? 0)}
-                  {valueSuffix}
+                  {formatted}
                 </span>
-                <span className="truncate text-[var(--text-secondary)]" title={s.itemName}>
-                  {displayItemName(s.itemName)}
-                </span>
+                <span className="text-[var(--text-secondary)]">{isRank ? "順位" : "価格"}</span>
               </div>
             );
           })}
@@ -95,114 +73,30 @@ function CustomTooltip({
   );
 }
 
-/**
- * 選択中シリーズの凡例。Rechartsの<Legend>は商品名(数十〜100文字超)を
- * 折り返し表示してしまいレイアウトが崩れるため使わず、
- * 省略表示+クリックで選択解除できる独自の凡例に置き換えている。
- */
-function ChartLegend({
-  series,
-  onRemove,
-}: {
-  series: ChartSeries[];
-  onRemove?: (itemCode: string) => void;
-}) {
-  // 単一系列の場合は色を判別する必要がなく、グラフタイトルが既に対象を示しているため凡例は不要
-  if (series.length <= 1) return null;
-
+/** 順位・価格の2系列であることを示す固定凡例 (対象商品は1件のため商品ごとの凡例は不要) */
+function MetricLegend() {
   return (
-    <div className="mb-3 flex flex-wrap gap-2">
-      {series.map((s) => (
-        <button
-          key={s.itemCode}
-          type="button"
-          onClick={() => onRemove?.(s.itemCode)}
-          title={s.itemName}
-          aria-label={`${s.itemName} を比較から外す`}
-          className="flex max-w-[220px] items-center gap-1.5 rounded-full border border-[var(--border-hairline)] bg-[var(--surface-2)] px-2.5 py-1 text-xs text-[var(--text-secondary)] transition-colors hover:border-[var(--baseline)]"
-        >
-          <span
-            className="h-2 w-2 shrink-0 rounded-full"
-            style={{ backgroundColor: s.color }}
-            aria-hidden
-          />
-          <span className="truncate">{displayItemName(s.itemName)}</span>
-          {onRemove && (
-            <span className="shrink-0 text-[var(--text-muted)]" aria-hidden>
-              ×
-            </span>
-          )}
-        </button>
-      ))}
+    <div className="mb-3 flex flex-wrap gap-4 text-xs text-[var(--text-secondary)]">
+      <span className="flex items-center gap-1.5">
+        <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: RANK_COLOR }} aria-hidden />
+        順位 (上ほど高順位)
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: PRICE_COLOR }} aria-hidden />
+        価格
+      </span>
     </div>
   );
 }
 
-function TrendLineChart({
-  series,
-  field,
-  reversed,
-  valuePrefix,
-  valueSuffix,
-}: {
-  series: ChartSeries[];
-  field: ChartField;
-  reversed?: boolean;
-  valuePrefix?: string;
-  valueSuffix?: string;
-}) {
-  const data = mergeSeries(series, field);
-
-  return (
-    <ResponsiveContainer width="100%" height={260}>
-      <LineChart data={data} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
-        <CartesianGrid stroke="var(--gridline)" strokeDasharray="0" vertical={false} />
-        <XAxis
-          dataKey="timestamp"
-          tickFormatter={formatTick}
-          tick={{ fill: "var(--text-muted)", fontSize: 12 }}
-          stroke="var(--baseline)"
-          minTickGap={32}
-        />
-        <YAxis
-          reversed={reversed}
-          allowDecimals={false}
-          tick={{ fill: "var(--text-muted)", fontSize: 12 }}
-          stroke="var(--baseline)"
-          width={48}
-        />
-        <Tooltip
-          content={
-            <CustomTooltip series={series} valuePrefix={valuePrefix} valueSuffix={valueSuffix} />
-          }
-        />
-        {series.map((s) => (
-          <Line
-            key={s.itemCode}
-            type="monotone"
-            dataKey={s.itemCode}
-            name={s.itemName}
-            stroke={s.color}
-            strokeWidth={2}
-            dot={{ r: 4, strokeWidth: 2, stroke: "var(--surface-1)", fill: s.color }}
-            activeDot={{ r: 5 }}
-            connectNulls={false}
-            isAnimationActive={false}
-          />
-        ))}
-      </LineChart>
-    </ResponsiveContainer>
-  );
-}
-
 export function RankingChart({
-  series,
-  onRemoveItem,
+  item,
+  onClear,
 }: {
-  series: ChartSeries[];
-  onRemoveItem?: (itemCode: string) => void;
+  item: ChartItem | null;
+  onClear?: () => void;
 }) {
-  if (series.length === 0) {
+  if (!item) {
     return (
       <div className="flex h-64 items-center justify-center rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-1)] text-sm text-[var(--text-muted)]">
         ランキング表から商品を選択すると、順位・価格の推移が表示されます。
@@ -210,21 +104,82 @@ export function RankingChart({
     );
   }
 
+  const data = [...item.points]
+    .sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+    .map((p) => ({ timestamp: p.timestamp, rank: p.rank, price: p.price }));
+
   return (
     <div className="rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-1)] p-4">
-      <ChartLegend series={series} onRemove={onRemoveItem} />
-      <div className="grid gap-6 md:grid-cols-2">
-        <div>
-          <h3 className="mb-2 text-sm font-semibold text-[var(--text-primary)]">
-            順位の推移 <span className="font-normal text-[var(--text-muted)]">(上ほど高順位)</span>
-          </h3>
-          <TrendLineChart series={series} field="rank" reversed valueSuffix="位" />
-        </div>
-        <div>
-          <h3 className="mb-2 text-sm font-semibold text-[var(--text-primary)]">価格の推移</h3>
-          <TrendLineChart series={series} field="price" valuePrefix="¥" />
-        </div>
+      <div className="mb-2 flex items-start justify-between gap-2">
+        <h3
+          className="min-w-0 truncate text-sm font-semibold text-[var(--text-primary)]"
+          title={item.itemName}
+        >
+          {displayItemName(item.itemName)}
+        </h3>
+        {onClear && (
+          <button
+            type="button"
+            onClick={onClear}
+            className="shrink-0 text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:underline"
+          >
+            選択解除
+          </button>
+        )}
       </div>
+      <MetricLegend />
+      <ResponsiveContainer width="100%" height={320}>
+        <LineChart data={data} margin={{ top: 8, right: 16, left: 8, bottom: 8 }}>
+          <CartesianGrid stroke="var(--gridline)" strokeDasharray="0" vertical={false} />
+          <XAxis
+            dataKey="timestamp"
+            tickFormatter={formatTick}
+            tick={{ fill: "var(--text-muted)", fontSize: 12 }}
+            stroke="var(--baseline)"
+            minTickGap={32}
+          />
+          <YAxis
+            yAxisId="rank"
+            reversed
+            allowDecimals={false}
+            tick={{ fill: RANK_COLOR, fontSize: 12 }}
+            stroke="var(--baseline)"
+            width={48}
+          />
+          <YAxis
+            yAxisId="price"
+            orientation="right"
+            tick={{ fill: PRICE_COLOR, fontSize: 12 }}
+            stroke="var(--baseline)"
+            width={64}
+          />
+          <Tooltip content={<CustomTooltip />} />
+          <Line
+            yAxisId="rank"
+            type="monotone"
+            dataKey="rank"
+            name="順位"
+            stroke={RANK_COLOR}
+            strokeWidth={2}
+            dot={{ r: 4, strokeWidth: 2, stroke: "var(--surface-1)", fill: RANK_COLOR }}
+            activeDot={{ r: 5 }}
+            connectNulls={false}
+            isAnimationActive={false}
+          />
+          <Line
+            yAxisId="price"
+            type="monotone"
+            dataKey="price"
+            name="価格"
+            stroke={PRICE_COLOR}
+            strokeWidth={2}
+            dot={{ r: 4, strokeWidth: 2, stroke: "var(--surface-1)", fill: PRICE_COLOR }}
+            activeDot={{ r: 5 }}
+            connectNulls={false}
+            isAnimationActive={false}
+          />
+        </LineChart>
+      </ResponsiveContainer>
     </div>
   );
 }

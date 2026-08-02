@@ -132,12 +132,21 @@ Geminiに渡すハイライトは最大8件(`MAX_HIGHLIGHTS`)に絞っている�
 `InsightCard.tsx`は`/api/insights`の直近5件を表示する際、ネイティブの`<details>`/
 `<summary>`によるアコーディオンになっている。**最新1件のみ`open={isLatest}`で展開済み**
 表示し、過去分は「日時+分析文の一行プレビュー」のみの折りたたみ行にしてクリックで個別展開する
-方式にしている。理由: 実データ(分析文+予測文+ハイライトバッジ最大8件)で5件を単純に縦積み
+方式にしている。理由: 実データ(分析文+予測文+旧ハイライトバッジ最大8件)で5件を単純に縦積み
 表示すると、Playwrightでの実測でページ全体が約3900pxまで伸び、ランキング表より大幅に縦長に
 なることを確認した。ここを直す/拡張する際、全件を常時展開する縦積み表示には戻さないこと。
 `open`はReactの`value`/`checked`のような完全制御ではなく初期値としてのみ使われるため、
 親の再レンダーでユーザーの手動トグル状態が上書きされることはない(状態をReact側で持たない
 ことで、このプロジェクトの厳しい`react-hooks`ルールの対象にもならない)。
+
+**変動ハイライトバッジは`InsightCard`ではなく`RankingLeaderboard`側に表示する。**
+新規ランクイン・順位急変・値上げ/値下げのバッジ(`HIGHLIGHT_META`/`movementLabel`、
+`src/lib/format/highlight.ts`に集約)は元々`InsightCard`内にあったが、ユーザーから
+「分析欄の変動情報をランキング表側にまとめたい」という要望を受け、ランキング表(`RankingLeaderboard.tsx`)
+の各行に「変動」列として表示する方式に変更した。`Dashboard.tsx`は最新1件のインサイト
+(`insights[0]`)の`highlights`のみを`itemCode`引きのMapに変換して`RankingLeaderboard`に渡す
+(過去のインサイトのハイライトは現在の順位表と対応しないため使わない)。`InsightCard`は
+分析文・予測文のみを表示する。
 
 ## フロントエンド実装で踏んだ制約 (このNext.js/Reactバージョン固有)
 
@@ -147,27 +156,39 @@ Geminiに渡すハイライトは最大8件(`MAX_HIGHLIGHTS`)に絞っている�
   エラーにする。ローディングフラグは「fetch完了後にsetStateする」か、「取得済みキーとの比較による
   派生値」として表現し、effect起動直後にsetStateしない設計にすること(`Dashboard.tsx`の
   `isLeaderboardLoading`は`loadedGenreId`との比較による派生値)。
-- **`react-hooks/refs`**: レンダー中の`ref.current`の読み書きも禁止。前回値を引き継ぐ派生状態
-  (例: 商品選択の色割り当て)は、effectやrefで後追い計算せず、**選択操作を行うイベントハンドラの中で
-  その場にstateを更新する**方式にすること(`Dashboard.tsx`の`handleToggleItem`を参照)。
+- **`react-hooks/refs`**: レンダー中の`ref.current`の読み書きも禁止。前回値を引き継ぐ派生状態は、
+  effectやrefで後追い計算せず、**選択操作を行うイベントハンドラの中でその場にstateを更新する**
+  方式にすること(`Dashboard.tsx`の`handleSelectItem`を参照。既取得済み時系列データの再フェッチ
+  防止に使う`fetchedSeriesKeys`のような「実際に副作用が必要なref」はeffect内で読み書きする分には
+  問題ない)。
 
 `AGENTS.md`にある通りNext.js自体もAPIが学習データと異なる場合があるため、新しい規約を使う前に
 `node_modules/next/dist/docs/`を確認する。
 
-### グラフ凡例は独自実装 (Rechartsの`<Legend>`を使わない)
+### グラフは単一商品の順位/価格を1枚に重ねる (Rechartsの`<Legend>`は使わない)
+
+グラフはもともと最大5商品を比較する複数系列表示だったが、ユーザーからの要望で**単一商品のみを
+選択する方式**に変更した(`RankingLeaderboard`の選択列がcheckbox→radioに変更され、
+`Dashboard.tsx`の状態も`selectedItemCodes: string[]`→`selectedItemCode: string | null`に
+なっている)。1商品を選ぶと、その商品の「順位の推移」と「価格の推移」を**1枚のグラフに2本の
+ラインとして重ねて**表示する(`RankingChart.tsx`)。RechartsのdualYAxis(`yAxisId="rank"`/
+`"price"`)を使い、順位軸は`reversed`(1位が上)、価格軸は右側に独立スケールで表示する。
+系列を色分けする凡例(`MetricLegend`)は「順位」「価格」の2種類固定のシンプルな凡例で、
+商品名は表示しない(対象商品は常に1件なので、色は商品ではなく指標を表す)。
 
 楽天の商品名は60〜100文字を超えることが珍しくない。Recharts標準の`<Legend>`にそのまま渡すと、
 名前が折り返し放題になりコンテナからはみ出して下のランキング表と重なる崩れ方をする(実際にモック無しの
-本番データで再現・確認済み)。そのため `RankingChart.tsx` では`<Legend>`は使わず、`ChartLegend`という
-独自のチップ型コンポーネント(CSSの`truncate`で省略+`title`属性で全文をホバー表示+クリックで
-選択解除)を使っている。ここを直す/拡張する際もRecharts標準Legendには戻さないこと。
+本番データで再現・確認済み)。この問題自体は単一商品化後も構造的には起こりうるため、
+`RankingChart.tsx`では引き続きRecharts標準`<Legend>`は使わず、選択中商品名はグラフ上部の見出しに
+`truncate`+`title`属性のホバー表示で出す形にしている。ここを直す/拡張する際もRecharts標準Legendには
+戻さないこと。
 
 ### 商品名冒頭の販促文言の除去 (表示専用)
 
 楽天の商品名は「今夜23:59までポイント10倍！お試し送料無料2,490円～」のような販促・SEO文言が
 冒頭に付くことが非常に多く、truncate表示だと肝心の商品名が見えないことが実データで多数確認された。
 `src/lib/format/itemName.ts`の`displayItemName()`がこれを表示専用に取り除く
-(`RankingLeaderboard` / `RankingChart`の凡例・ツールチップ / `InsightCard`のハイライトバッジで使用)。
+(`RankingLeaderboard`の商品名列 / `RankingChart`のグラフ見出しで使用)。
 正規表現ベースの経験則で、元の`itemName`データは一切変更しない。呼び出し側は必ず`title`属性等で
 元の全文を確認できるようにすること。この関数を拡張する際は、実データ(`/api/rankings`)の商品名で
 `node`から直接テストし、既存の除去パターンを壊していないか確認してから反映すること

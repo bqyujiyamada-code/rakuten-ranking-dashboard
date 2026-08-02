@@ -1,15 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { GenreSelector, type GenreOption } from "@/components/GenreSelector";
 import { RankingLeaderboard, type LeaderboardItem } from "@/components/RankingLeaderboard";
-import { RankingChart, type ChartSeries } from "@/components/RankingChart";
+import { RankingChart, type ChartItem } from "@/components/RankingChart";
 import { InsightCard, type InsightData } from "@/components/InsightCard";
-
-const MAX_SELECTED_ITEMS = 5;
-
-const SERIES_COLORS_LIGHT = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"];
-const SERIES_COLORS_DARK = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181"];
+import type { DiffHighlightRecord } from "@/lib/db/types";
 
 interface TimeSeriesPoint {
   timestamp: string;
@@ -32,26 +28,7 @@ async function safeFetchJson<T>(url: string, fallback: T): Promise<T> {
   }
 }
 
-function usePaletteColors(): string[] {
-  const [isDark, setIsDark] = useState(
-    () =>
-      typeof window !== "undefined" &&
-      window.matchMedia("(prefers-color-scheme: dark)").matches,
-  );
-
-  useEffect(() => {
-    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    const handleChange = (event: MediaQueryListEvent) => setIsDark(event.matches);
-    mediaQuery.addEventListener("change", handleChange);
-    return () => mediaQuery.removeEventListener("change", handleChange);
-  }, []);
-
-  return isDark ? SERIES_COLORS_DARK : SERIES_COLORS_LIGHT;
-}
-
 export function Dashboard() {
-  const paletteColors = usePaletteColors();
-
   const [genres, setGenres] = useState<GenreOption[]>([]);
   const [selectedGenreId, setSelectedGenreId] = useState<string | null>(null);
 
@@ -59,8 +36,7 @@ export function Dashboard() {
   const [loadedGenreId, setLoadedGenreId] = useState<string | null>(null);
   const [insights, setInsights] = useState<InsightData[]>([]);
 
-  const [selectedItemCodes, setSelectedItemCodes] = useState<string[]>([]);
-  const [colorAssignments, setColorAssignments] = useState<Record<string, string>>({});
+  const [selectedItemCode, setSelectedItemCode] = useState<string | null>(null);
   const [seriesCache, setSeriesCache] = useState<Record<string, TimeSeriesPoint[]>>({});
   const fetchedSeriesKeys = useRef(new Set<string>());
 
@@ -113,81 +89,56 @@ export function Dashboard() {
 
   // 選択された商品の時系列データ取得 (未取得分のみ)
   useEffect(() => {
-    if (!selectedGenreId) return;
-    const toFetch = selectedItemCodes.filter(
-      (itemCode) => !fetchedSeriesKeys.current.has(`${selectedGenreId}:${itemCode}`),
-    );
-    if (toFetch.length === 0) return;
-    toFetch.forEach((itemCode) =>
-      fetchedSeriesKeys.current.add(`${selectedGenreId}:${itemCode}`),
-    );
+    if (!selectedGenreId || !selectedItemCode) return;
+    const cacheKey = `${selectedGenreId}:${selectedItemCode}`;
+    if (fetchedSeriesKeys.current.has(cacheKey)) return;
+    fetchedSeriesKeys.current.add(cacheKey);
 
     let cancelled = false;
     (async () => {
-      const entries = await Promise.all(
-        toFetch.map(async (itemCode) => {
-          const data = await safeFetchJson<{ series: TimeSeriesPoint[] }>(
-            `/api/rankings?genreId=${encodeURIComponent(selectedGenreId)}&itemCode=${encodeURIComponent(itemCode)}`,
-            { series: [] },
-          );
-          return [itemCode, data.series] as const;
-        }),
+      const data = await safeFetchJson<{ series: TimeSeriesPoint[] }>(
+        `/api/rankings?genreId=${encodeURIComponent(selectedGenreId)}&itemCode=${encodeURIComponent(selectedItemCode)}`,
+        { series: [] },
       );
       if (cancelled) return;
-      setSeriesCache((prev) => {
-        const next = { ...prev };
-        for (const [itemCode, points] of entries) {
-          next[`${selectedGenreId}:${itemCode}`] = points;
-        }
-        return next;
-      });
+      setSeriesCache((prev) => ({ ...prev, [cacheKey]: data.series }));
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [selectedItemCodes, selectedGenreId]);
+  }, [selectedItemCode, selectedGenreId]);
 
   function handleSelectGenre(genreId: string) {
     setSelectedGenreId(genreId);
-    setSelectedItemCodes([]);
-    setColorAssignments({});
+    setSelectedItemCode(null);
   }
 
-  // 色の割り当ては選択操作の瞬間に確定させる。解除したアイテムの色は
-  // 他の選択中アイテムには引き継がれず、空いた枠として次の新規選択に回る。
-  function handleToggleItem(itemCode: string) {
-    if (selectedItemCodes.includes(itemCode)) {
-      setSelectedItemCodes(selectedItemCodes.filter((code) => code !== itemCode));
-      const nextColors = { ...colorAssignments };
-      delete nextColors[itemCode];
-      setColorAssignments(nextColors);
-      return;
+  // 同じ商品をもう一度選ぶと選択解除する
+  function handleSelectItem(itemCode: string) {
+    setSelectedItemCode((current) => (current === itemCode ? null : itemCode));
+  }
+
+  // 直近の収集回で検知された変動 (新規ランクイン・順位急変・価格変動) をitemCode別に引けるようにする。
+  // 過去のインサイト分の変動は現在の順位表とは対応しないため、最新1件のみを使う。
+  const highlightByItemCode = useMemo(() => {
+    const map: Record<string, DiffHighlightRecord> = {};
+    for (const highlight of insights[0]?.highlights ?? []) {
+      map[highlight.itemCode] = highlight;
     }
+    return map;
+  }, [insights]);
 
-    if (selectedItemCodes.length >= MAX_SELECTED_ITEMS) return;
-
-    const usedColors = new Set(Object.values(colorAssignments));
-    const color = paletteColors.find((c) => !usedColors.has(c));
-    if (!color) return;
-
-    setSelectedItemCodes([...selectedItemCodes, itemCode]);
-    setColorAssignments({ ...colorAssignments, [itemCode]: color });
-  }
-
-  const chartSeries: ChartSeries[] = selectedItemCodes
-    .map((itemCode): ChartSeries | null => {
-      const item = leaderboard.find((i) => i.itemCode === itemCode);
-      const color = colorAssignments[itemCode];
-      if (!item || !color || !selectedGenreId) return null;
-      return {
-        itemCode,
-        itemName: item.itemName,
-        color,
-        points: seriesCache[`${selectedGenreId}:${itemCode}`] ?? [],
-      };
-    })
-    .filter((s): s is ChartSeries => s !== null);
+  const chartItem: ChartItem | null = (() => {
+    if (!selectedItemCode || !selectedGenreId) return null;
+    const item = leaderboard.find((i) => i.itemCode === selectedItemCode);
+    if (!item) return null;
+    return {
+      itemCode: selectedItemCode,
+      itemName: item.itemName,
+      points: seriesCache[`${selectedGenreId}:${selectedItemCode}`] ?? [],
+    };
+  })();
 
   const selectedGenreName =
     genres.find((g) => g.genreId === selectedGenreId)?.name ?? "";
@@ -214,15 +165,14 @@ export function Dashboard() {
           <h2 className="mb-2 text-sm font-semibold text-[var(--text-primary)]">
             {selectedGenreName ? `${selectedGenreName}のランキング` : "ランキング"}
             <span className="ml-2 font-normal text-[var(--text-muted)]">
-              (最大{MAX_SELECTED_ITEMS}件まで比較可能)
+              (商品を選択すると順位・価格の推移をグラフ表示)
             </span>
           </h2>
           <RankingLeaderboard
             items={leaderboard}
-            selectedItemCodes={selectedItemCodes}
-            colorFor={(itemCode) => colorAssignments[itemCode]}
-            onToggle={handleToggleItem}
-            maxSelected={MAX_SELECTED_ITEMS}
+            selectedItemCode={selectedItemCode}
+            highlightFor={(itemCode) => highlightByItemCode[itemCode]}
+            onSelect={handleSelectItem}
             isLoading={isLeaderboardLoading}
           />
         </div>
@@ -243,8 +193,7 @@ export function Dashboard() {
         </div>
       </div>
 
-      {/* グラフは商品名の凡例が長くなるため、狭い列に収めず全幅で表示する */}
-      <RankingChart series={chartSeries} onRemoveItem={handleToggleItem} />
+      <RankingChart item={chartItem} onClear={() => setSelectedItemCode(null)} />
     </div>
   );
 }

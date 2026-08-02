@@ -1,6 +1,8 @@
 "use client";
 
 import { displayItemName } from "@/lib/format/itemName";
+import { HIGHLIGHT_META, movementLabel } from "@/lib/format/highlight";
+import type { DiffHighlightRecord } from "@/lib/db/types";
 
 export interface LeaderboardItem {
   itemCode: string;
@@ -16,17 +18,15 @@ const priceFormatter = new Intl.NumberFormat("ja-JP");
 
 export function RankingLeaderboard({
   items,
-  selectedItemCodes,
-  colorFor,
-  onToggle,
-  maxSelected,
+  selectedItemCode,
+  highlightFor,
+  onSelect,
   isLoading,
 }: {
   items: LeaderboardItem[];
-  selectedItemCodes: string[];
-  colorFor: (itemCode: string) => string | undefined;
-  onToggle: (itemCode: string) => void;
-  maxSelected: number;
+  selectedItemCode: string | null;
+  highlightFor: (itemCode: string) => DiffHighlightRecord | undefined;
+  onSelect: (itemCode: string) => void;
   isLoading: boolean;
 }) {
   if (isLoading) {
@@ -47,58 +47,66 @@ export function RankingLeaderboard({
 
   return (
     <div className="max-h-[520px] overflow-y-auto overflow-x-auto rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-1)]">
-      <table className="w-full min-w-[560px] text-sm">
+      <table className="w-full min-w-[640px] text-sm">
         <thead className="sticky top-0 z-10 bg-[var(--surface-1)]">
           <tr className="border-b border-[var(--gridline)] text-left text-xs text-[var(--text-muted)]">
-            <th className="w-10 px-3 py-2 font-medium">比較</th>
+            <th className="w-10 px-3 py-2 font-medium">表示</th>
             <th className="w-14 px-3 py-2 font-medium">順位</th>
+            <th className="w-32 px-3 py-2 font-medium">変動</th>
             <th className="px-3 py-2 font-medium">商品名</th>
             <th className="px-3 py-2 text-right font-medium">価格</th>
           </tr>
         </thead>
         <tbody>
           {items.map((item) => {
-            const isSelected = selectedItemCodes.includes(item.itemCode);
-            const color = colorFor(item.itemCode);
-            const disabled = !isSelected && selectedItemCodes.length >= maxSelected;
+            const isSelected = item.itemCode === selectedItemCode;
+            const highlight = highlightFor(item.itemCode);
+            const meta = highlight ? HIGHLIGHT_META[highlight.type] : null;
+            const movement = highlight ? movementLabel(highlight) : null;
 
             return (
               <tr
                 key={item.itemCode}
-                className="border-b border-[var(--gridline)] last:border-0 hover:bg-[var(--surface-2)]"
+                className={`border-b border-[var(--gridline)] last:border-0 hover:bg-[var(--surface-2)] ${
+                  isSelected ? "bg-[var(--surface-2)]" : ""
+                }`}
               >
                 <td className="px-3 py-2">
                   <input
-                    type="checkbox"
+                    type="radio"
+                    name="chart-item"
                     checked={isSelected}
-                    disabled={disabled}
-                    onChange={() => onToggle(item.itemCode)}
-                    aria-label={`${item.itemName}を比較対象に追加`}
-                    style={isSelected ? { accentColor: color } : undefined}
+                    onChange={() => onSelect(item.itemCode)}
+                    aria-label={`${item.itemName}の順位・価格推移を表示`}
                   />
                 </td>
                 <td className="px-3 py-2 font-medium tabular-nums text-[var(--text-secondary)]">
                   {item.rank}
                 </td>
                 <td className="px-3 py-2">
-                  <div className="flex items-center gap-2">
-                    {isSelected && (
-                      <span
-                        className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
-                        style={{ backgroundColor: color }}
-                        aria-hidden
-                      />
-                    )}
-                    <a
-                      href={item.itemUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="line-clamp-1 hover:underline"
-                      title={item.itemName}
+                  {highlight && meta && (
+                    <span
+                      className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs"
+                      style={{ borderColor: meta.color, color: meta.color }}
+                      title={highlight.detail}
                     >
-                      {displayItemName(item.itemName)}
-                    </a>
-                  </div>
+                      <span className="shrink-0">{meta.label}</span>
+                      {movement && (
+                        <span className="shrink-0 font-semibold tabular-nums">{movement}</span>
+                      )}
+                    </span>
+                  )}
+                </td>
+                <td className="px-3 py-2">
+                  <a
+                    href={item.itemUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="line-clamp-1 hover:underline"
+                    title={item.itemName}
+                  >
+                    {displayItemName(item.itemName)}
+                  </a>
                   {item.shopName && (
                     <div className="text-xs text-[var(--text-muted)]">{item.shopName}</div>
                   )}
