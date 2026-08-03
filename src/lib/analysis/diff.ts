@@ -10,6 +10,8 @@ export const DIFF_THRESHOLDS = {
   priceUpMinPct: 0.15,
 } as const;
 
+// Geminiに渡すハイライト数の上限。ランキング表示側 (detectDiffHighlightsの戻り値) には
+// この上限を適用しない。selectHighlightsForGemini参照。
 const MAX_HIGHLIGHTS = 8;
 // 楽天のリアルタイムランキングは母数が小さいジャンルほど日次の総入れ替わりが激しく、
 // 新規ランクインだけで8枠が埋まりやすい。ランク上昇/下降・価格変動の枠を確保するため、
@@ -17,8 +19,10 @@ const MAX_HIGHLIGHTS = 8;
 const MAX_NEW_ENTRY_HIGHLIGHTS = 4;
 
 /**
- * 今回取得したランキングと前回スナップショットを比較し、
- * Geminiに渡す価値のある「重要な変化」のみを抽出する。
+ * 今回取得したランキングと前回スナップショットを比較し、閾値 (DIFF_THRESHOLDS) を超えた
+ * 変化を全て抽出する。件数の上限は設けない — ランキング表の「変動」列はこの戻り値をそのまま
+ * itemCode単位で表示するため、ここで絞り込むと表示対象外の商品が出てしまう。
+ * Geminiに渡す際は呼び出し側で別途 selectHighlightsForGemini を通すこと。
  */
 export function detectDiffHighlights(
   currentItems: RankingItem[],
@@ -93,14 +97,17 @@ export function detectDiffHighlights(
     }
   }
 
-  return selectDiverseHighlights(highlights);
+  return sortBySignificance(highlights);
 }
 
 /**
- * 新規ランクインが件数で他タイプを圧倒しないよう、新規ランクインの採用数に上限を設けた上で
- * MAX_HIGHLIGHTS件を選ぶ。他タイプの候補が少ない場合は余った枠を新規ランクインで埋める。
+ * Geminiに渡すハイライトを選ぶ。新規ランクインが件数で他タイプを圧倒しないよう、
+ * 新規ランクインの採用数に上限を設けた上でMAX_HIGHLIGHTS件を選ぶ。他タイプの候補が
+ * 少ない場合は余った枠を新規ランクインで埋める。detectDiffHighlightsの戻り値
+ * (ランキング表表示用・上限なし) から呼び出し側 (collectAndAnalyzeGenre) が
+ * この関数を通してGemini用に絞り込む。
  */
-function selectDiverseHighlights(
+export function selectHighlightsForGemini(
   highlights: DiffHighlightRecord[],
 ): DiffHighlightRecord[] {
   const sorted = sortBySignificance(highlights);

@@ -8,7 +8,7 @@ import {
   putInsight,
   putRankingSnapshot,
 } from "@/lib/db/rankingRepository";
-import { detectDiffHighlights } from "@/lib/analysis/diff";
+import { detectDiffHighlights, selectHighlightsForGemini } from "@/lib/analysis/diff";
 import { generateTrendInsight } from "@/lib/analysis/gemini";
 import type { DiffHighlightRecord } from "@/lib/db/types";
 
@@ -49,9 +49,12 @@ export async function collectAndAnalyzeGenre(
   if (highlights.length > 0) {
     try {
       const previousInsight = await getLatestInsight(genre.genreId);
+      // Geminiには件数・多様性を絞った部分集合のみ渡す。保存する highlights (ランキング表の
+      // 「変動」列がそのまま表示に使う) は detectDiffHighlights が返した全件のまま。
+      const geminiHighlights = selectHighlightsForGemini(highlights);
       const { trendAnalysisText, forecastText } = await generateTrendInsight(
         genre.name,
-        highlights,
+        geminiHighlights,
         new Date(timestamp),
         previousInsight
           ? {

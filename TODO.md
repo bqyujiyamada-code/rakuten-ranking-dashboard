@@ -180,6 +180,29 @@ Playwright(ヘッドレスChromium)で本番DBに繋いだdevサーバーを操�
 - Playwright(ヘッドレスChromium、モックAPIレスポンス)でライト/ダークモード・商品選択後の
   表示を確認し、`tsc --noEmit` / `eslint` / `next build` がパスすることも確認済み。
 
+### 21. ランキング表示用ハイライトとGemini用ハイライトの分離
+
+対応20.でランキング表の「変動」列にハイライトを表示するようにしたところ、ユーザーから
+「1〜30位全件に表示されるようになったか」との確認があり、実際には`selectDiverseHighlights`
+(Geminiに渡す件数を絞る目的で元々あったロジック)が保存データ自体にも掛かっていたため、
+最大8件・新規ランクインは最大4件までしか表示されないことが判明した。さらに「ランキング表示用と
+Gemini用のハイライトを分離すべきでは」という指摘を受け、以下の設計変更を行った。
+
+- `src/lib/analysis/diff.ts`: `detectDiffHighlights`を、閾値(`DIFF_THRESHOLDS`)を超えた変化を
+  **件数上限なしで全件返す**よう変更(戻り値はランキング表の「変動」列がそのまま使う)。
+  従来ここに内包されていた8件キャップ+新規ランクイン多様性ロジックは`selectHighlightsForGemini`
+  という別関数に切り出してexportし、Gemini呼び出し側でのみ使うようにした。
+- `src/lib/collectAndAnalyze.ts`: `collectAndAnalyzeGenre`で、`detectDiffHighlights`の全件を
+  `putInsight`(DynamoDB保存 = ランキング表・API表示用)にそのまま渡す一方、Gemini呼び出し
+  (`generateTrendInsight`)には`selectHighlightsForGemini(highlights)`で絞り込んだ部分集合のみ
+  渡すよう分離した。
+- 動作確認: `node --experimental-strip-types`でdiff.tsを直接実行し、新規ランクインのみ30件中
+  該当10件の局面で全件版が10件・Gemini版が8件(新規ランクインで空き枠を埋める既存仕様通り)、
+  各変動タイプが6件ずつ混在する局面で全件版が30件・Gemini版が8件(うち新規ランクインは上限の
+  4件)になることを確認済み。
+- `tsc --noEmit` / `eslint` / `next build` はパス。Gemini呼び出し自体は本番の次回自動収集
+  (Cronは1日1回)まで実データでの確認はできていない。
+
 ## 未対応 (実運用前に必要)
 
 - [ ] 次回以降の自動収集で、前回分析文をGeminiプロンプトに含める連続性機能(対応19.)が実データで
@@ -195,3 +218,6 @@ Playwright(ヘッドレスChromium)で本番DBに繋いだdevサーバーを操�
 - [ ] 本番運用を見据えたレート制限・リトライ・監視/アラートの調整
 - [ ] (任意) ユニットテスト・E2Eテストの追加
 - [ ] (任意) `/api/cron/collect` 以外のAPIルートに対する認可制御の要否検討(現状はダッシュボード表示用に公開)
+- [ ] 次回の自動収集で、対応21.の変更(ランキング表示用ハイライトの全件化・Gemini用ハイライトの
+  分離)が実データで意図通り機能するか確認(ランキング表の「変動」列が8件超のジャンルで
+  実際に増えるか、Geminiへの分析結果に悪影響が出ていないか)
