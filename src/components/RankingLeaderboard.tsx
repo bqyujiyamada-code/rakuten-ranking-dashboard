@@ -67,7 +67,8 @@ export function RankingLeaderboard({
             return (
               <tr
                 key={item.itemCode}
-                className={`border-b border-[var(--gridline)] last:border-0 hover:bg-[var(--surface-2)] ${
+                onClick={() => onSelect(item.itemCode)}
+                className={`cursor-pointer border-b border-[var(--gridline)] last:border-0 hover:bg-[var(--surface-2)] ${
                   isSelected ? "bg-[var(--surface-2)]" : ""
                 }`}
               >
@@ -77,6 +78,7 @@ export function RankingLeaderboard({
                     name="chart-item"
                     checked={isSelected}
                     onChange={() => onSelect(item.itemCode)}
+                    onClick={(event) => event.stopPropagation()}
                     aria-label={`${item.itemName}の順位・価格推移を表示`}
                   />
                 </td>
@@ -102,6 +104,7 @@ export function RankingLeaderboard({
                     href={item.itemUrl}
                     target="_blank"
                     rel="noopener noreferrer"
+                    onClick={(event) => event.stopPropagation()}
                     className="line-clamp-1 hover:underline"
                     title={item.itemName}
                   >
