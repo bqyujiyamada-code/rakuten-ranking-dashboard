@@ -1,6 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 import { env } from "@/lib/config/env";
 import { formatJstDateLabel } from "@/lib/date/jst";
+import { stripMarkdown } from "@/lib/format/markdown";
 
 const MODEL = "gemini-3-flash-preview";
 
@@ -50,7 +51,9 @@ export async function fetchDailyTrendSummary(
 - 個人の噂話やゴシップではなく、天候・気温・災害・大型セール/イベント・
   流行語・話題の商品ジャンルなど、消費行動と関連しそうな話題を優先すること。
 - 該当する話題が見つからない場合は「特筆すべき話題は見当たらない」とだけ書くこと。
-  存在しない話題を作り上げないこと。`;
+  存在しない話題を作り上げないこと。
+- 出力はプレーンテキストのみとし、Markdown記法(\`**太字**\`、見出しの\`#\`等)は
+  一切使わないこと。箇条書きの記号は半角の\`*\`や\`-\`ではなく全角の「・」を使うこと。`;
 
   const response = await ai.models.generateContent({
     model: MODEL,
@@ -61,10 +64,12 @@ export async function fetchDailyTrendSummary(
     },
   });
 
-  const summaryText = response.text?.trim();
-  if (!summaryText) {
+  const rawSummaryText = response.text?.trim();
+  if (!rawSummaryText) {
     throw new Error("Gemini API returned an empty trend summary");
   }
+  // プロンプトでMarkdownを使わないよう指示していても確実ではないため、保存前に正規化する
+  const summaryText = stripMarkdown(rawSummaryText);
 
   const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks ?? [];
   const sources: { title: string; uri: string }[] = [];
