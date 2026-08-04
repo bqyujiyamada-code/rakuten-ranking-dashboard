@@ -1,13 +1,20 @@
-import { getItemTimeSeries, getLatestSnapshot } from "@/lib/db/rankingRepository";
+import {
+  getDailyBundle,
+  getItemTimeSeries,
+  getLatestSnapshot,
+  getSnapshotAtTimestamp,
+} from "@/lib/db/rankingRepository";
 
 /**
- * GET /api/rankings?genreId=xxx           -> 直近の順位表 (leaderboard)
- * GET /api/rankings?genreId=xxx&itemCode=y -> 特定商品の順位・価格の時系列
+ * GET /api/rankings?genreId=xxx                 -> 直近の順位表 (leaderboard)
+ * GET /api/rankings?genreId=xxx&date=YYYY-MM-DD  -> 指定日(JST収集日)時点の順位表 (バックナンバー)
+ * GET /api/rankings?genreId=xxx&itemCode=y       -> 特定商品の順位・価格の時系列 (dateは無視)
  */
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const genreId = searchParams.get("genreId");
   const itemCode = searchParams.get("itemCode");
+  const date = searchParams.get("date");
 
   if (!genreId) {
     return Response.json({ error: "genreId is required" }, { status: 400 });
@@ -27,9 +34,17 @@ export async function GET(request: Request) {
       });
     }
 
-    const snapshot = await getLatestSnapshot(genreId);
+    const snapshot = date
+      ? await (async () => {
+          const bundle = await getDailyBundle(date);
+          if (!bundle) return [];
+          return getSnapshotAtTimestamp(genreId, bundle.timestamp);
+        })()
+      : await getLatestSnapshot(genreId);
+
     return Response.json({
       genreId,
+      date: date ?? null,
       items: snapshot.map((s) => ({
         itemCode: s.itemCode,
         itemName: s.itemName,

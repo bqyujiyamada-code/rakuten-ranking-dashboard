@@ -6,7 +6,8 @@
       "Effect": "Allow",
       "Action": [
         "dynamodb:CreateTable",
-        "dynamodb:DescribeTable"
+        "dynamodb:DescribeTable",
+        "dynamodb:UpdateTable"
       ],
       "Resource": "arn:aws:dynamodb:ap-northeast-1:<AWS_ACCOUNT_ID>:table/RakutenRankings"
     },
@@ -21,7 +22,8 @@
       ],
       "Resource": [
         "arn:aws:dynamodb:ap-northeast-1:<AWS_ACCOUNT_ID>:table/RakutenRankings",
-        "arn:aws:dynamodb:ap-northeast-1:<AWS_ACCOUNT_ID>:table/RakutenRankings/index/GSI1_GenreTimestamp"
+        "arn:aws:dynamodb:ap-northeast-1:<AWS_ACCOUNT_ID>:table/RakutenRankings/index/GSI1_GenreTimestamp",
+        "arn:aws:dynamodb:ap-northeast-1:<AWS_ACCOUNT_ID>:table/RakutenRankings/index/GSI2_DailyBundle"
       ]
     }
   ]

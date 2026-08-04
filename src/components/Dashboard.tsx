@@ -5,6 +5,8 @@ import { GenreSelector, type GenreOption } from "@/components/GenreSelector";
 import { RankingLeaderboard, type LeaderboardItem } from "@/components/RankingLeaderboard";
 import { RankingChart, type ChartItem } from "@/components/RankingChart";
 import { InsightCard, type InsightData } from "@/components/InsightCard";
+import { HistoryDatePicker, type DateOption } from "@/components/HistoryDatePicker";
+import { formatJstDateLabel } from "@/lib/date/jst";
 import type { DiffHighlightRecord } from "@/lib/db/types";
 
 interface TimeSeriesPoint {
@@ -12,6 +14,33 @@ interface TimeSeriesPoint {
   rank: number;
   price: number;
 }
+
+interface DailyContextWeather {
+  location: string;
+  tempMaxC: number;
+  tempMinC: number;
+  precipitationMm: number;
+  weatherLabel: string;
+}
+
+interface DailyContextTrend {
+  summaryText: string;
+  sources: { title: string; uri: string }[];
+}
+
+interface DailyContextData {
+  date: string | null;
+  causalDate: string | null;
+  weather: DailyContextWeather | null;
+  trend: DailyContextTrend | null;
+}
+
+const EMPTY_DAILY_CONTEXT: DailyContextData = {
+  date: null,
+  causalDate: null,
+  weather: null,
+  trend: null,
+};
 
 /** DB/外部APIの一時的な障害でダッシュボード全体がクラッシュしないよう、失敗時はフォールバック値を返す */
 async function safeFetchJson<T>(url: string, fallback: T): Promise<T> {
@@ -32,9 +61,13 @@ export function Dashboard() {
   const [genres, setGenres] = useState<GenreOption[]>([]);
   const [selectedGenreId, setSelectedGenreId] = useState<string | null>(null);
 
+  const [historyDates, setHistoryDates] = useState<DateOption[]>([]);
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+
   const [leaderboard, setLeaderboard] = useState<LeaderboardItem[]>([]);
-  const [loadedGenreId, setLoadedGenreId] = useState<string | null>(null);
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
   const [insights, setInsights] = useState<InsightData[]>([]);
+  const [dailyContext, setDailyContext] = useState<DailyContextData>(EMPTY_DAILY_CONTEXT);
 
   const [selectedItemCode, setSelectedItemCode] = useState<string | null>(null);
   const [seriesCache, setSeriesCache] = useState<Record<string, TimeSeriesPoint[]>>({});
@@ -58,34 +91,70 @@ export function Dashboard() {
     };
   }, []);
 
-  // 選択ジャンルの順位表 + AIインサイト取得
+  // バックナンバー閲覧用に、収集済みの日付一覧を初期取得
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const data = await safeFetchJson<{ dates: DateOption[] }>("/api/dates", {
+        dates: [],
+      });
+      if (cancelled) return;
+      setHistoryDates(data.dates);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 選択ジャンル・選択日の順位表 + AIインサイト取得
   useEffect(() => {
     if (!selectedGenreId) return;
     let cancelled = false;
 
     (async () => {
+      const dateQuery = selectedDate ? `&date=${encodeURIComponent(selectedDate)}` : "";
+      const insightQuery = selectedDate ? dateQuery : "&limit=5";
       const [rankData, insightData] = await Promise.all([
         safeFetchJson<{ items: LeaderboardItem[] }>(
-          `/api/rankings?genreId=${encodeURIComponent(selectedGenreId)}`,
+          `/api/rankings?genreId=${encodeURIComponent(selectedGenreId)}${dateQuery}`,
           { items: [] },
         ),
         safeFetchJson<{ insights: InsightData[] }>(
-          `/api/insights?genreId=${encodeURIComponent(selectedGenreId)}&limit=5`,
+          `/api/insights?genreId=${encodeURIComponent(selectedGenreId)}${insightQuery}`,
           { insights: [] },
         ),
       ]);
       if (cancelled) return;
       setLeaderboard(rankData.items);
       setInsights(insightData.insights);
-      setLoadedGenreId(selectedGenreId);
+      setLoadedKey(`${selectedGenreId}:${selectedDate ?? "latest"}`);
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [selectedGenreId]);
+  }, [selectedGenreId, selectedDate]);
 
-  const isLeaderboardLoading = selectedGenreId !== null && selectedGenreId !== loadedGenreId;
+  // 選択日の判断材料(前日の気象・世間のトレンド)取得。ジャンルには依存しない
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const dateQuery = selectedDate ? `?date=${encodeURIComponent(selectedDate)}` : "";
+      const data = await safeFetchJson<DailyContextData>(
+        `/api/daily-context${dateQuery}`,
+        EMPTY_DAILY_CONTEXT,
+      );
+      if (cancelled) return;
+      setDailyContext(data);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedDate]);
+
+  const isLeaderboardLoading =
+    selectedGenreId !== null &&
+    loadedKey !== `${selectedGenreId}:${selectedDate ?? "latest"}`;
 
   // 選択された商品の時系列データ取得 (未取得分のみ)
   useEffect(() => {
@@ -114,13 +183,19 @@ export function Dashboard() {
     setSelectedItemCode(null);
   }
 
+  function handleSelectDate(date: string | null) {
+    setSelectedDate(date);
+    setSelectedItemCode(null);
+  }
+
   // 同じ商品をもう一度選ぶと選択解除する
   function handleSelectItem(itemCode: string) {
     setSelectedItemCode((current) => (current === itemCode ? null : itemCode));
   }
 
-  // 直近の収集回で検知された変動 (新規ランクイン・順位急変・価格変動) をitemCode別に引けるようにする。
-  // 過去のインサイト分の変動は現在の順位表とは対応しないため、最新1件のみを使う。
+  // 選択日(=表示中の順位表)に対応する収集回で検知された変動 (新規ランクイン・順位急変・
+  // 価格変動) をitemCode別に引けるようにする。leaderboardとinsightsは常に同じ日付で
+  // 取得しているため、latest表示時も過去日付表示時も対応関係は保たれる。
   const highlightByItemCode = useMemo(() => {
     const map: Record<string, DiffHighlightRecord> = {};
     for (const highlight of insights[0]?.highlights ?? []) {
@@ -150,15 +225,22 @@ export function Dashboard() {
           楽天ランキング トレンドダッシュボード
         </h1>
         <p className="mt-1 text-sm text-[var(--text-secondary)]">
-          定期収集したランキングの推移と、AIによる変動分析を確認できます。
+          定期収集したランキングの推移と、気象・世間のトレンドを踏まえたAI分析を確認できます。
         </p>
       </header>
 
-      <GenreSelector
-        genres={genres}
-        selectedGenreId={selectedGenreId}
-        onSelect={handleSelectGenre}
-      />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <GenreSelector
+          genres={genres}
+          selectedGenreId={selectedGenreId}
+          onSelect={handleSelectGenre}
+        />
+        <HistoryDatePicker
+          dates={historyDates}
+          selectedDate={selectedDate}
+          onSelect={handleSelectDate}
+        />
+      </div>
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <div>
@@ -181,6 +263,30 @@ export function Dashboard() {
           <h2 className="text-sm font-semibold text-[var(--text-primary)]">
             AIトレンド分析
           </h2>
+
+          {(dailyContext.weather || dailyContext.trend) && (
+            <div className="rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-1)] p-4 text-sm">
+              <p className="mb-2 text-xs font-medium text-[var(--text-muted)]">
+                🌤 分析の判断材料
+                {dailyContext.causalDate
+                  ? ` (前日 ${formatJstDateLabel(dailyContext.causalDate)} の東京)`
+                  : ""}
+              </p>
+              {dailyContext.weather && (
+                <p className="text-[var(--text-primary)]">
+                  最高{dailyContext.weather.tempMaxC}°C / 最低
+                  {dailyContext.weather.tempMinC}°C・降水量
+                  {dailyContext.weather.precipitationMm}mm・{dailyContext.weather.weatherLabel}
+                </p>
+              )}
+              {dailyContext.trend && (
+                <p className="mt-2 whitespace-pre-line leading-relaxed text-[var(--text-secondary)]">
+                  {dailyContext.trend.summaryText}
+                </p>
+              )}
+            </div>
+          )}
+
           {insights.length === 0 ? (
             <div className="rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-1)] p-6 text-sm text-[var(--text-muted)]">
               このジャンルではまだ有意な変動が検知されていません。収集が2回以上行われると表示されます。

@@ -1,5 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { env } from "@/lib/config/env";
+import { formatJstDateLabel, toJstDateString } from "@/lib/date/jst";
 import type { DiffHighlightRecord } from "@/lib/db/types";
 
 const MODEL = "gemini-3-flash-preview";
@@ -28,17 +29,24 @@ const RESPONSE_SCHEMA = {
   required: ["trendAnalysis", "forecast"],
 } as const;
 
-const JST_DATE_FORMATTER = new Intl.DateTimeFormat("ja-JP", {
-  timeZone: "Asia/Tokyo",
-  year: "numeric",
-  month: "long",
-  day: "numeric",
-  weekday: "long",
-});
-
 export interface PreviousInsight {
   trendAnalysisText: string;
   forecastText?: string;
+}
+
+/** 気象データ(因果関係分析の参考材料)。dateはこの気象が実際に発生したJST暦日 */
+export interface WeatherContext {
+  date: string;
+  tempMaxC: number;
+  tempMinC: number;
+  precipitationMm: number;
+  weatherLabel: string;
+}
+
+/** 世間のトレンド要約(因果関係分析の参考材料)。dateは要約の対象としたJST暦日 */
+export interface TrendContext {
+  date: string;
+  summaryText: string;
 }
 
 function buildPrompt(
@@ -46,11 +54,13 @@ function buildPrompt(
   highlights: DiffHighlightRecord[],
   collectedAt: Date,
   previousInsight: PreviousInsight | null,
+  weather: WeatherContext | null,
+  trend: TrendContext | null,
 ): string {
   const bulletList = highlights
     .map((h, i) => `${i + 1}. [${h.type}] ${h.itemName} — ${h.detail}`)
     .join("\n");
-  const todayLabel = JST_DATE_FORMATTER.format(collectedAt);
+  const todayLabel = formatJstDateLabel(toJstDateString(collectedAt));
 
   const continuitySection = previousInsight
     ? `
@@ -65,12 +75,25 @@ function buildPrompt(
 `
     : "";
 
+  // 今回のランキングは「前日(causalDate)の消費行動が反映された結果」として捉え、
+  // 気象・トレンドは前日分を渡す (詳細な設計理由はCLAUDE.md参照)。
+  const causalContextSection =
+    weather || trend
+      ? `
+## ${formatJstDateLabel(weather?.date ?? trend?.date ?? "")}(前日)の気象・世間の動き(参考)
+このランキングは、前日の気象や世間の動きが消費行動に影響し、その結果として
+現れたものである可能性があります。関連が読み取れる場合の参考情報として提示します。
+${weather ? `- 東京の気象: 最高${weather.tempMaxC}°C / 最低${weather.tempMinC}°C、降水量${weather.precipitationMm}mm、天気: ${weather.weatherLabel}` : ""}
+${trend ? `- 世間のトレンド: ${trend.summaryText}` : ""}
+`
+      : "";
+
   return `あなたは楽天市場のトレンドを分析するECマーケットアナリストです。
 本日の日付は${todayLabel}(日本時間)です。以下は「${genreName}」ジャンルの楽天ランキングにおける、
 前回計測時からの主な変動点です。
 
 ${bulletList}
-${continuitySection}
+${continuitySection}${causalContextSection}
 分析にあたっては、以下の点に注意してください。
 - 商品名には「お中元」「セール」「今だけ」等の販促・SEO目的のキーワードが実際の時期と関係なく
   含まれていることが多い。本日の日付と照らして時期的に妥当かどうかを必ず確認し、季節性を
@@ -78,16 +101,22 @@ ${continuitySection}
 - 楽天のリアルタイムランキングは母数が小さいジャンルほど日々の入れ替わりが激しく、新規ランクイン
   が多いこと自体は必ずしも強いトレンドを意味しない。データから読み取れる範囲を超えて、もっともら
   しい物語を作り上げないこと。根拠が薄い場合は「明確な傾向は読み取りにくい」旨を正直に書いてよい。
+- 気象・世間のトレンド情報が提示されている場合、ランキング変動との間に**データから合理的に
+  説明できる関連**があれば、trendAnalysis内でその因果関係(例: 気温上昇→冷感・水分補給関連商品の
+  需要増、大型セール→特定カテゴリの露出増)に具体的に触れること。関連が薄い、あるいはこじつけに
+  なる場合は無理に天候・トレンド要因に結びつけず、気象・トレンドには触れなくてよい。存在しない
+  因果関係を作り上げないこと。
 
 次の2つを、それぞれ日本語で3〜4文程度の簡潔な文章として作成してください。断定しすぎず
 「〜と考えられます」「〜の可能性があります」のような推察のトーンで書き、商品名を箇条書きで
 繰り返すのではなく傾向として何が起きているかを説明してください。
 
 1. trendAnalysis: これらの変動から読み取れる消費者トレンドや、変動の背景として考えられる理由
-   (季節性、セール、メディア露出、価格戦略など)。
-2. forecast: 上記のトレンドが続いた場合、今後このジャンルで新たにランクインしてきそうな
-   商品の傾向(カテゴリ・価格帯・訴求ポイントなど)についての予測。個別の未発売商品名を
-   でっち上げるのではなく、「〜のような商品」「〜系の商品」といった傾向として述べること。`;
+   (季節性、セール、メディア露出、価格戦略、気象・世間のトレンドとの関連など)。
+2. forecast: 上記のトレンド(気象・世間のトレンドの傾向が今後数日続くと仮定した場合を含む)が
+   続いた場合、今後このジャンルで新たにランクインしてきそうな商品の傾向(カテゴリ・価格帯・
+   訴求ポイントなど)についての予測。個別の未発売商品名をでっち上げるのではなく、
+   「〜のような商品」「〜系の商品」といった傾向として述べること。`;
 }
 
 export interface TrendInsightResult {
@@ -105,9 +134,18 @@ export async function generateTrendInsight(
   highlights: DiffHighlightRecord[],
   collectedAt: Date = new Date(),
   previousInsight: PreviousInsight | null = null,
+  weather: WeatherContext | null = null,
+  trend: TrendContext | null = null,
 ): Promise<TrendInsightResult> {
   const ai = getClient();
-  const prompt = buildPrompt(genreName, highlights, collectedAt, previousInsight);
+  const prompt = buildPrompt(
+    genreName,
+    highlights,
+    collectedAt,
+    previousInsight,
+    weather,
+    trend,
+  );
 
   const response = await ai.models.generateContent({
     model: MODEL,

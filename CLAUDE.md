@@ -12,6 +12,7 @@ Next.jsダッシュボードで可視化するアプリ。詳細な対応状況�
 - 楽天ウェブサービス Ranking API (2026年移行後の新エンドポイント `openapi.rakuten.co.jp/ichibaranking/api/IchibaItem/Ranking/20220601`。詳細は下記「楽天API利用時の注意」を参照)
 - Google Gemini API (`@google/genai`, モデル `gemini-3-flash-preview`)
 - Recharts (グラフ描画)
+- Open-Meteo (気象データ、APIキー不要)
 
 ## ディレクトリ構成と役割
 
@@ -19,6 +20,7 @@ Next.jsダッシュボードで可視化するアプリ。詳細な対応状況�
 scripts/create-table.mjs        DynamoDBテーブル+GSI作成 (npm run db:create-table)
 src/lib/config/env.ts           環境変数アクセサ (未設定なら例外を投げる)
 src/lib/aws/dynamodb.ts         DynamoDBDocumentClient
+src/lib/date/jst.ts             JST暦日ユーティリティ (toJstDateString/addDaysJst/formatJstDateLabel)
 src/lib/db/
   keys.ts                       PK/SK/GSIキー生成ロジック (単一テーブル設計)
   types.ts                      DynamoDBアイテムの型定義
@@ -27,14 +29,20 @@ src/lib/rakuten/
   genres.ts                     収集対象「主要中ジャンル」マスタ
   client.ts                     楽天ランキングAPIクライアント
   types.ts                      APIレスポンス/正規化データの型
+src/lib/weather/
+  openMeteo.ts                  Open-Meteoから東京の日次気象(実測値)を取得
+  weatherCode.ts                WMO weather code → 日本語ラベル変換
 src/lib/analysis/
   diff.ts                       前回スナップショットとの差分検知
-  gemini.ts                     Geminiによるトレンド考察生成
-src/lib/collectAndAnalyze.ts    「取得→差分検知→AI分析→保存」のオーケストレーション
+  gemini.ts                     Geminiによるトレンド考察生成 (気象/トレンド因果分析込み)
+  trendSummary.ts                Gemini Google Search groundingによる世間のトレンド要約
+src/lib/collectAndAnalyze.ts    「取得→気象/トレンド取得→差分検知→AI分析→保存」のオーケストレーション
 src/app/api/
   cron/collect/route.ts         定期収集バッチのエントリポイント
-  genres/route.ts, rankings/route.ts, insights/route.ts  ダッシュボード用API
-src/components/                 GenreSelector, RankingLeaderboard, RankingChart, InsightCard, Dashboard
+  genres/route.ts, rankings/route.ts, insights/route.ts  ダッシュボード用API (&date=でバックナンバー対応)
+  dates/route.ts                 収集済み日付一覧 (バックナンバー選択用)
+  daily-context/route.ts         指定日の気象・トレンド(判断材料)取得
+src/components/                 GenreSelector, HistoryDatePicker, RankingLeaderboard, RankingChart, InsightCard, Dashboard
 ```
 
 ## DynamoDB 設計 (単一テーブル `RakutenRankings`)
@@ -47,6 +55,9 @@ src/components/                 GenreSelector, RankingLeaderboard, RankingChart,
 | GSI1 (上記の別引き) | `GENRE#{genreId}` | `TS#{timestamp}#RANK#{rank}` | ジャンル×時刻の順位表を取得 (`getSnapshotAtTimestamp`) |
 | ジャンルメタ | `GENRE#{genreId}#META` | `LATEST` | 直近2回分の収集timestampを保持し、差分検知の基準にする |
 | AIインサイト | `GENRE#{genreId}#INSIGHT` | `TS#{timestamp}` | Gemini生成コメント+差分ハイライトの履歴 |
+| 気象(日次) | `WEATHER#{date}` | `DAILY` | 東京の実測気象データ。`date`はその気象が実際に発生したJST暦日 |
+| トレンド(日次) | `TREND#{date}` | `DAILY` | Gemini検索groundingによる世間のトレンド要約。`date`は要約対象のJST暦日 |
+| 日次バンドル索引 | `DAY#{date}` | `META` | ランキング収集日(`date`)から`timestamp`/`causalDate`を引く。GSI2でdate降順一覧も可能 |
 
 **差分検知の前提**: `collectAndAnalyzeGenre` は「ジャンルメタのlatestTimestamp」を前回スナップショットの
 timestampとして扱い、そのタイムスタンプでGSI1を引いて前回の順位表を再構成する。1つの収集バッチ内で
@@ -54,6 +65,50 @@ timestampとして扱い、そのタイムスタンプでGSI1を引いて前回�
 `mergeSeries`)も書かれているため、収集バッチのtimestampは**ジャンル単位・バッチ単位で使い回すこと**
 (商品ごと・APIコールごとに新しい`Date.now()`を取らない)。ここを崩すと折れ線グラフが点だけになる
 (検証時に実際にこの不具合をモックで再現して確認済み)。
+
+## 気象・世間のトレンドの統合 (因果関係分析の設計)
+
+ユーザーから「気象データ」と「世間のトレンド」をAI分析に統合し、因果関係の深掘りと将来予測の
+精度を高めたいという要望を受けて追加した機能。設計の要点は以下の通り。
+
+- **タイムラグの扱い**: 「7時収集のランキングは前日の消費行動が反映された結果」という前提に
+  基づき、`causalDate = 収集日(JST) - 1日`(`src/lib/date/jst.ts`の`addDaysJst`)を気象・
+  トレンドの対象日として扱う。気象・トレンド自体は「発生した日」をキーに独立した時系列として
+  蓄積し(`WEATHER#{date}`/`TREND#{date}`)、「どのランキング日にどの気象日を紐付けるか」は
+  保存時ではなく参照時(`causalDate`の計算)で決めている。ラグを「前日」から「直近3日平均」等に
+  変更したくなっても、過去データの再キー付けは不要。
+- **追加の夜間バッチは不要**: Open-Meteoの`past_days`パラメータは確定済みの実測値を返すため、
+  7時のCron実行時点で前日(`causalDate`)は既に終わっており、予報ではなく確定情報として
+  同じCron内で即座に取得できる。そのためHobbyプランの「Cronは1日1回まで」という制約の中に
+  収まっている(`collectAndAnalyzeAllGenres`が唯一のエントリポイント)。
+- **1日1回・全ジャンル共通で取得**: 気象・トレンドの取得はジャンルループの外で1回だけ行い
+  (`getOrFetchWeatherContext`/`getOrFetchTrendContext`)、既にDBにその日のキャッシュが
+  あれば再利用する。ジャンルごとに16回呼ぶと東京の天気やGeminiのトレンド要約を無駄に繰り返す
+  ことになるため。
+- **トレンド要約はGemini自身のGoogle Search groundingで生成**: `src/lib/analysis/trendSummary.ts`。
+  新規の外部ニュースAPI契約は行っていない。**構造化出力(`responseSchema`)と`googleSearch`
+  ツールは同時利用できないため、この呼び出しは意図的にプレーンテキストで受け取り、ランキング
+  分析用の構造化JSON呼び出し(`gemini.ts`)とは別のGemini呼び出しとして分離してある。**
+  この分離を崩して1回のGemini呼び出しに統合しようとすると、構造化出力が壊れるので注意。
+- **Geminiプロンプトへの反映**: `trendAnalysis`/`forecast`という既存の出力フィールド構成は
+  変更せず、気象・トレンド情報をプロンプトに追加した上で「データから合理的に説明できる関連が
+  あれば因果関係(気温上昇→冷感グッズ需要、等)に触れる。薄ければ無理にこじつけない」旨を
+  指示している。存在しない因果関係を作り上げないという、対応16.以来のガードレール方針を踏襲。
+- **バックナンバー機能**: 過去の収集日を選んで、当時のランキング・気象・トレンド・AI分析を
+  一式で切り替えて閲覧できる(`HistoryDatePicker` + `/api/dates` + `/api/daily-context` +
+  `/api/rankings`・`/api/insights`の`&date=`パラメータ)。`DAY#{date}`索引から`timestamp`を
+  引き、既存の`getSnapshotAtTimestamp`/新設`getInsightAtTimestamp`をそのまま使うだけで
+  実現しており、ランキング側のキー構造(GSI1)は変更していない。
+- **GSI2とIAM権限(要対応)**: 日付一覧を新しい順に取得するため`GSI2_DailyBundle`
+  (`GSI2PK`固定値`"DAILY_BUNDLE"` / `GSI2SK=date`) を新設した。**本番DynamoDBへの追加には
+  `dynamodb:UpdateTable`権限が必要だが、現在IAMユーザー`rakuten_ranking_api`にアタッチ
+  済みの最小権限ポリシーはこれを許可しておらず、`npm run db:create-table`実行時に
+  `AccessDeniedException`になることを確認済み。** `iam/dynamodb-policy.json`は
+  `UpdateTable`権限+`GSI2_DailyBundle`のARNを追加する形で更新済みだが、実際にAWSへの
+  適用(ポリシー作成・アタッチ)はユーザー側の対応が必要(TODO.md未対応リスト参照)。
+  未適用の間は`/api/dates`・`/api/daily-context`が500を返すが、フロントエンドは
+  日付ピッカー・判断材料パネルを単に非表示にするだけでクラッシュはしない
+  (Playwrightで確認済み)。
 
 ## 楽天API利用時の注意
 

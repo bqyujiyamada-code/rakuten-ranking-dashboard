@@ -6,8 +6,15 @@ import {
 } from "@aws-sdk/lib-dynamodb";
 import { ddb, TABLE_NAME } from "@/lib/aws/dynamodb";
 import {
+  DAILY_BUNDLE_GSI2PK,
+  DAILY_BUNDLE_SK,
   GSI1_NAME,
+  GSI2_NAME,
   META_SK,
+  TREND_SK,
+  WEATHER_SK,
+  dailyBundleGsi2Sk,
+  dailyBundlePk,
   genreGsi1Pk,
   genreGsi1Sk,
   genreGsi1SkPrefix,
@@ -16,12 +23,17 @@ import {
   itemPk,
   itemSk,
   metaPk,
+  trendPk,
+  weatherPk,
 } from "@/lib/db/keys";
 import type {
+  DailyBundleItem,
   DiffHighlightRecord,
   GenreMetaItem,
   InsightItem,
   RankingSnapshotItem,
+  TrendDailyItem,
+  WeatherDailyItem,
 } from "@/lib/db/types";
 import type { RankingItem } from "@/lib/rakuten/types";
 
@@ -233,4 +245,116 @@ export async function listInsights(
     }),
   );
   return (result.Items ?? []) as InsightItem[];
+}
+
+/** 特定timestampのインサイトをピンポイントで取得 (過去日付のバックナンバー閲覧用) */
+export async function getInsightAtTimestamp(
+  genreId: string,
+  timestamp: string,
+): Promise<InsightItem | null> {
+  const result = await ddb.send(
+    new GetCommand({
+      TableName: TABLE_NAME,
+      Key: { PK: insightPk(genreId), SK: insightSk(timestamp) },
+    }),
+  );
+  return (result.Item as InsightItem | undefined) ?? null;
+}
+
+/** 気象データ(日次・東京)を保存。dateはその気象が実際に発生したJST暦日 */
+export async function putWeatherDaily(
+  date: string,
+  data: Omit<WeatherDailyItem, "PK" | "SK" | "entityType" | "date">,
+): Promise<void> {
+  const item: WeatherDailyItem = {
+    PK: weatherPk(date),
+    SK: WEATHER_SK,
+    entityType: "WEATHER_DAILY",
+    date,
+    ...data,
+  };
+  await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
+}
+
+export async function getWeatherDaily(date: string): Promise<WeatherDailyItem | null> {
+  const result = await ddb.send(
+    new GetCommand({
+      TableName: TABLE_NAME,
+      Key: { PK: weatherPk(date), SK: WEATHER_SK },
+    }),
+  );
+  return (result.Item as WeatherDailyItem | undefined) ?? null;
+}
+
+/** 世間のトレンド要約(日次)を保存。dateは要約の対象としたJST暦日 */
+export async function putTrendDaily(
+  date: string,
+  summaryText: string,
+  sources: { title: string; uri: string }[],
+): Promise<void> {
+  const item: TrendDailyItem = {
+    PK: trendPk(date),
+    SK: TREND_SK,
+    entityType: "TREND_DAILY",
+    date,
+    summaryText,
+    sources,
+    fetchedAt: new Date().toISOString(),
+  };
+  await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
+}
+
+export async function getTrendDaily(date: string): Promise<TrendDailyItem | null> {
+  const result = await ddb.send(
+    new GetCommand({
+      TableName: TABLE_NAME,
+      Key: { PK: trendPk(date), SK: TREND_SK },
+    }),
+  );
+  return (result.Item as TrendDailyItem | undefined) ?? null;
+}
+
+/** 日次バンドル索引を保存 (収集バッチの最後に1回呼ぶ) */
+export async function putDailyBundle(
+  date: string,
+  timestamp: string,
+  causalDate: string,
+): Promise<void> {
+  const item: DailyBundleItem = {
+    PK: dailyBundlePk(date),
+    SK: DAILY_BUNDLE_SK,
+    entityType: "DAILY_BUNDLE",
+    date,
+    timestamp,
+    causalDate,
+    GSI2PK: DAILY_BUNDLE_GSI2PK,
+    GSI2SK: dailyBundleGsi2Sk(date),
+    createdAt: new Date().toISOString(),
+  };
+  await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
+}
+
+export async function getDailyBundle(date: string): Promise<DailyBundleItem | null> {
+  const result = await ddb.send(
+    new GetCommand({
+      TableName: TABLE_NAME,
+      Key: { PK: dailyBundlePk(date), SK: DAILY_BUNDLE_SK },
+    }),
+  );
+  return (result.Item as DailyBundleItem | undefined) ?? null;
+}
+
+/** 利用可能な過去の収集日を新しい順に一覧取得 (日付ピッカー用) */
+export async function listRecentDailyBundles(limit = 90): Promise<DailyBundleItem[]> {
+  const result = await ddb.send(
+    new QueryCommand({
+      TableName: TABLE_NAME,
+      IndexName: GSI2_NAME,
+      KeyConditionExpression: "GSI2PK = :pk",
+      ExpressionAttributeValues: { ":pk": DAILY_BUNDLE_GSI2PK },
+      ScanIndexForward: false,
+      Limit: limit,
+    }),
+  );
+  return (result.Items ?? []) as DailyBundleItem[];
 }
