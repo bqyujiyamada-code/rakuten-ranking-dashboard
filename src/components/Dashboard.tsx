@@ -113,7 +113,8 @@ export function Dashboard() {
 
     (async () => {
       const dateQuery = selectedDate ? `&date=${encodeURIComponent(selectedDate)}` : "";
-      const insightQuery = selectedDate ? dateQuery : "&limit=5";
+      // 表示日ピッカーで過去日にも遡れるため、インサイトは常に表示中の日の1件だけを見せれば良い
+      const insightQuery = selectedDate ? dateQuery : "&limit=1";
       const [rankData, insightData] = await Promise.all([
         safeFetchJson<{ items: LeaderboardItem[] }>(
           `/api/rankings?genreId=${encodeURIComponent(selectedGenreId)}${dateQuery}`,
@@ -243,7 +244,7 @@ export function Dashboard() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-        <div>
+        <div className="min-w-0">
           <h2 className="mb-2 text-sm font-semibold text-[var(--text-primary)]">
             {selectedGenreName ? `${selectedGenreName}のランキング` : "ランキング"}
             <span className="ml-2 font-normal text-[var(--text-muted)]">
@@ -292,9 +293,7 @@ export function Dashboard() {
               このジャンルではまだ有意な変動が検知されていません。収集が2回以上行われると表示されます。
             </div>
           ) : (
-            insights.map((insight, index) => (
-              <InsightCard key={insight.timestamp} insight={insight} isLatest={index === 0} />
-            ))
+            <InsightCard insight={insights[0]} />
           )}
         </div>
       </div>
