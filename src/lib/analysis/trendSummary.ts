@@ -4,6 +4,14 @@ import { formatJstDateLabel } from "@/lib/date/jst";
 
 const MODEL = "gemini-3-flash-preview";
 
+// gemini.tsのGEMINI_HTTP_OPTIONSと同じ理由(SDK既定の5回リトライがVercel Hobbyの300秒予算を
+// 独り占めしうるため)でリトライを行わない。この呼び出しは1日1回だけなので、検索grounding分の
+// 余裕を見てタイムアウトはgenerateTrendInsightより長めにしている。
+const TREND_HTTP_OPTIONS = {
+  timeout: 20_000,
+  retryOptions: { attempts: 1 },
+} as const;
+
 let client: GoogleGenAI | null = null;
 
 function getClient(): GoogleGenAI {
@@ -49,6 +57,7 @@ export async function fetchDailyTrendSummary(
     contents: prompt,
     config: {
       tools: [{ googleSearch: {} }],
+      httpOptions: TREND_HTTP_OPTIONS,
     },
   });
 

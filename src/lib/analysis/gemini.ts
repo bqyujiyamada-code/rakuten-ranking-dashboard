@@ -5,6 +5,17 @@ import type { DiffHighlightRecord } from "@/lib/db/types";
 
 const MODEL = "gemini-3-flash-preview";
 
+// Vercel Hobbyの300秒上限のうち、楽天API呼び出し(16ジャンル分、待機込みで概算70秒)を
+// 差し引いた残り約230秒を「トレンド要約1回+最大16ジャンル分のこの呼び出し」で分け合う想定。
+// SDK既定のリトライ(5回・指数バックオフ)を残すと1回のGemini高負荷(503)だけで予算を
+// 使い切りバッチ全体が0件処理のままタイムアウトする(2026-08-05に実際に発生、CLAUDE.md参照)。
+// そのためリトライは行わず(attempts: 1)、失敗は呼び出し側の try/catch でジャンル単位
+// スキップに任せることで、他ジャンルのランキング収集・分析を必ず進められるようにする。
+const GEMINI_HTTP_OPTIONS = {
+  timeout: 12_000,
+  retryOptions: { attempts: 1 },
+} as const;
+
 let client: GoogleGenAI | null = null;
 
 function getClient(): GoogleGenAI {
@@ -153,6 +164,7 @@ export async function generateTrendInsight(
     config: {
       responseMimeType: "application/json",
       responseSchema: RESPONSE_SCHEMA,
+      httpOptions: GEMINI_HTTP_OPTIONS,
     },
   });
 
