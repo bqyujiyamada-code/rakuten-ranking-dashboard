@@ -5,7 +5,8 @@ import { formatJstDateLabel } from "@/lib/date/jst";
 
 export interface InsightData {
   timestamp: string;
-  aiAnalysisText: string;
+  /** Gemini分析が失敗した日はnull(差分ハイライト自体は検知できていることがある) */
+  aiAnalysisText: string | null;
   forecastText?: string | null;
   highlights: DiffHighlightRecord[];
   createdAt: string;
@@ -74,9 +75,8 @@ export function InsightCard({
   trend?: DailyContextTrend | null;
   causalDate?: string | null;
 }) {
-  const { headline, body } = insight
-    ? splitHeadline(insight.aiAnalysisText)
-    : { headline: "", body: "" };
+  const aiText = insight?.aiAnalysisText ?? null;
+  const { headline, body } = aiText ? splitHeadline(aiText) : { headline: "", body: "" };
 
   return (
     <details
@@ -103,9 +103,13 @@ export function InsightCard({
           </span>
         </div>
 
-        {insight ? (
+        {aiText ? (
           <p className="text-lg font-bold leading-snug text-[var(--text-primary)] md:text-xl">
             {headline}
+          </p>
+        ) : insight ? (
+          <p className="text-sm text-[var(--text-muted)]">
+            本日は変動を検知しましたが、AI分析コメントは取得できませんでした。ランキング表の「変動」列で内容をご確認いただけます。
           </p>
         ) : (
           <p className="text-sm text-[var(--text-muted)]">
@@ -115,11 +119,11 @@ export function InsightCard({
       </summary>
 
       <div className="mt-3">
-        {insight && body && (
+        {aiText && body && (
           <p className="text-sm leading-relaxed text-[var(--text-secondary)]">{body}</p>
         )}
 
-        {insight?.forecastText && (
+        {aiText && insight?.forecastText && (
           <div
             className="mt-4 rounded-lg border-l-4 bg-[var(--surface-2)] py-2 pl-3 pr-3"
             style={{ borderColor: "var(--series-2)" }}

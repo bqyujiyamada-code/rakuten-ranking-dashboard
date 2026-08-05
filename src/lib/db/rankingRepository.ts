@@ -18,6 +18,8 @@ import {
   genreGsi1Pk,
   genreGsi1Sk,
   genreGsi1SkPrefix,
+  highlightsPk,
+  highlightsSk,
   insightPk,
   insightSk,
   itemPk,
@@ -29,6 +31,7 @@ import {
 import type {
   DailyBundleItem,
   DiffHighlightRecord,
+  DiffHighlightsItem,
   GenreMetaItem,
   InsightItem,
   RankingSnapshotItem,
@@ -195,13 +198,12 @@ export async function getItemTimeSeries(
   return (result.Items ?? []) as RankingSnapshotItem[];
 }
 
-/** AI分析済みインサイトコメントを保存 */
+/** AI分析済みインサイトコメントを保存(ハイライトはputHighlightsで別途保存する) */
 export async function putInsight(
   genreId: string,
   timestamp: string,
   aiAnalysisText: string,
   forecastText: string,
-  highlights: DiffHighlightRecord[],
 ): Promise<void> {
   const item: InsightItem = {
     PK: insightPk(genreId),
@@ -211,7 +213,6 @@ export async function putInsight(
     timestamp,
     aiAnalysisText,
     forecastText,
-    highlights,
     createdAt: new Date().toISOString(),
   };
   await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
@@ -231,20 +232,38 @@ export async function getLatestInsight(genreId: string): Promise<InsightItem | n
   return (item as InsightItem | undefined) ?? null;
 }
 
-export async function listInsights(
+/**
+ * 差分ハイライトを保存。Gemini分析の成否とは独立に、差分検知ができた収集バッチで必ず
+ * 呼ぶこと(collectAndAnalyze.ts参照)。
+ */
+export async function putHighlights(
   genreId: string,
-  limit = 10,
-): Promise<InsightItem[]> {
+  timestamp: string,
+  highlights: DiffHighlightRecord[],
+): Promise<void> {
+  const item: DiffHighlightsItem = {
+    PK: highlightsPk(genreId),
+    SK: highlightsSk(timestamp),
+    entityType: "DIFF_HIGHLIGHTS",
+    genreId,
+    timestamp,
+    highlights,
+    createdAt: new Date().toISOString(),
+  };
+  await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
+}
+
+export async function getHighlightsAtTimestamp(
+  genreId: string,
+  timestamp: string,
+): Promise<DiffHighlightsItem | null> {
   const result = await ddb.send(
-    new QueryCommand({
+    new GetCommand({
       TableName: TABLE_NAME,
-      KeyConditionExpression: "PK = :pk",
-      ExpressionAttributeValues: { ":pk": insightPk(genreId) },
-      ScanIndexForward: false,
-      Limit: limit,
+      Key: { PK: highlightsPk(genreId), SK: highlightsSk(timestamp) },
     }),
   );
-  return (result.Items ?? []) as InsightItem[];
+  return (result.Item as DiffHighlightsItem | undefined) ?? null;
 }
 
 /** 特定timestampのインサイトをピンポイントで取得 (過去日付のバックナンバー閲覧用) */

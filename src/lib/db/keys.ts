@@ -42,6 +42,18 @@ export function insightSk(timestamp: string): string {
   return `TS#${timestamp}`;
 }
 
+/**
+ * 差分ハイライト(ランキング表の「変動」列表示用)のキー。Gemini分析の成否とは独立に、
+ * 差分検知ができた時点で必ず保存する(collectAndAnalyze.ts参照)。
+ */
+export function highlightsPk(genreId: string): string {
+  return `GENRE#${genreId}#HIGHLIGHTS`;
+}
+
+export function highlightsSk(timestamp: string): string {
+  return `TS#${timestamp}`;
+}
+
 /** 気象データ(日次・実際に発生した日=JST暦日をキーにする)のキー */
 export function weatherPk(date: string): string {
   return `WEATHER#${date}`;

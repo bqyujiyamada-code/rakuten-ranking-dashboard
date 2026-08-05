@@ -105,14 +105,14 @@ export function Dashboard() {
     (async () => {
       const dateQuery = selectedDate ? `&date=${encodeURIComponent(selectedDate)}` : "";
       // 表示日ピッカーで過去日にも遡れるため、インサイトは常に表示中の日の1件だけを見せれば良い
-      const insightQuery = selectedDate ? dateQuery : "&limit=1";
+      // (dateなし = 最新1件、/api/insightsのデフォルト仕様)
       const [rankData, insightData] = await Promise.all([
         safeFetchJson<{ items: LeaderboardItem[] }>(
           `/api/rankings?genreId=${encodeURIComponent(selectedGenreId)}${dateQuery}`,
           { items: [] },
         ),
         safeFetchJson<{ insights: InsightData[] }>(
-          `/api/insights?genreId=${encodeURIComponent(selectedGenreId)}${insightQuery}`,
+          `/api/insights?genreId=${encodeURIComponent(selectedGenreId)}${dateQuery}`,
           { insights: [] },
         ),
       ]);

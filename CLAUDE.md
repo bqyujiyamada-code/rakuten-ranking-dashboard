@@ -232,10 +232,13 @@ try/catchでは短縮できない**ため、この設計だけでは不十分だ
 インサイト欄に複数日分を積んで見せる必要自体が無くなった。ユーザーからの「表示日当日以外の
 分析は表示させなくていい」という指摘を受け、`InsightCard`はアコーディオンをやめて
 **常に表示中の1日分だけを常時展開の単一カードで表示する**方式に単純化した。
-`Dashboard.tsx`側は、最新表示時は`/api/insights?...&limit=1`、過去日表示時は`&date=`で、
-どちらも常に最大1件だけ取得する。`isLatest`のような分岐props・「最新」バッジも不要になった
-ため削除している。ここを拡張する際、複数日分を1画面に積み重ねる縦積み/アコーディオン表示には
-戻さないこと(表示日の切り替えは日付ピッカー側の役割)。
+`Dashboard.tsx`側は、最新表示時は`/api/insights?genreId=...`(dateなし)、過去日表示時は
+`&date=`で、どちらも常に最大1件だけ取得する(`/api/insights`は元々`limit`パラメータを
+持っていたが、対応26.で「常に最大1件」の設計に合わせて廃止し、`GenreMeta.latestTimestamp`/
+`DAY#{date}`バンドルからtimestampを1つ解決する方式に書き換えた)。`isLatest`のような
+分岐props・「最新」バッジも不要になったため削除している。ここを拡張する際、複数日分を
+1画面に積み重ねる縦積み/アコーディオン表示には戻さないこと(表示日の切り替えは
+日付ピッカー側の役割)。
 
 **変動ハイライトバッジは`InsightCard`ではなく`RankingLeaderboard`側に表示する。**
 新規ランクイン・順位急変・値上げ/値下げのバッジ(`HIGHLIGHT_META`/`movementLabel`、
@@ -245,6 +248,45 @@ try/catchでは短縮できない**ため、この設計だけでは不十分だ
 (`insights[0]`)の`highlights`のみを`itemCode`引きのMapに変換して`RankingLeaderboard`に渡す
 (過去のインサイトのハイライトは現在の順位表と対応しないため使わない)。`InsightCard`は
 分析文・予測文のみを表示する。
+
+## 差分ハイライトの保存はGemini分析の成否から独立させている (対応26.)
+
+ユーザーから「1年分など長期でデータが溜まった際に季節性・長期トレンドを分析できるか」と
+問われたのをきっかけに、データ完全性の穴を1つ発見・修正した。
+
+- **問題**: 以前は差分ハイライト(`DiffHighlightRecord[]`)を`InsightItem`に同梱して
+  `putInsight`で保存しており、`putInsight`はGemini呼び出しが**成功した場合のみ**
+  (`collectAndAnalyzeGenre`のtry блок内)呼ばれていた。そのため、差分検知自体はできていても
+  Gemini API障害(2026-08-05に実際に発生した300秒タイムアウト障害を参照)でその日の
+  Gemini呼び出しが失敗すると、ハイライトの生データごと丸ごと失われ、当日のランキング表の
+  「変動」列も空になっていた。将来の長期分析はこの生データ(ジャンル単位の値上げ/値下げ・
+  新規ランクイン件数の月次集計など)を主な材料にする想定のため、この欠落は放置できないと判断した。
+- **対応**: 差分ハイライトを`InsightItem`から切り離し、`DiffHighlightsItem`
+  (`GENRE#{genreId}#HIGHLIGHTS` / `TS#{timestamp}`)という独立エンティティに変更。
+  `collectAndAnalyzeGenre`(`collectAndAnalyze.ts`)は、差分検知ができた時点で
+  Gemini呼び出しの前に`putHighlights`を必ず呼ぶ。`putInsight`はAI分析テキスト
+  (`aiAnalysisText`/`forecastText`)のみを保存する形に縮小した。
+- **後方互換**: この変更より前に書き込まれた過去の`InsightItem`には`highlights`が
+  埋め込まれたまま残っている。`InsightItem.highlights`は型定義上`@deprecated`かつoptionalの
+  まま残し、`/api/insights`は`DiffHighlightsItem`が無い場合(＝この対応より前の日付)のみ
+  `InsightItem.highlights`にフォールバックする。バックフィルは行っていない
+  (対応23.のバックフィル同様、生データから復元可能なものは無理にバックフィルしない方針)。
+- **`/api/insights`の書き換え**: 「その日の収集バッチが使ったtimestamp」を先に解決してから
+  (dateありなら`DAY#{date}`バンドル、最新表示なら`GenreMeta.latestTimestamp` — どちらも
+  Gemini呼び出しの成否とは無関係に必ず更新される)、AI分析(`InsightItem`)とハイライト
+  (`DiffHighlightsItem`)を**独立に**引いてマージするよう変更した。以前は最新表示時に
+  `listInsights`(`InsightItem`の一覧クエリ)を使っており、これだと当日Geminiが失敗した場合
+  「最新」が前日のInsightItemにフォールバックしてしまい、当日のランキングと噛み合わない
+  古いハイライトを表示しかねなかった(この問題があったため`listInsights`は削除した)。
+- **フロントエンドの3状態対応**: `InsightCard.tsx`の`InsightData.aiAnalysisText`を
+  `string | null`に変更し、(1)変動なし(`insight`自体がnull)、(2)変動を検知したが
+  AI分析文がない(Gemini失敗)、(3)AI分析文あり、の3状態を描画するようにした。(2)の場合は
+  「本日は変動を検知しましたが、AI分析コメントは取得できませんでした。ランキング表の
+  「変動」列で内容をご確認いただけます。」と表示し、本文・予測・判断材料ブロックは
+  出さない。ここを触る際、`aiAnalysisText`がnullになりうる前提を崩さないこと。
+- **未着手**: 週次/月次ロールアップの集計処理・専用のGemini長期分析呼び出し自体はまだ
+  実装していない(対応19.以来の既知の未実装事項、TODO.md参照)。今回はその前提となる
+  生データの完全性を担保しただけ。
 
 ## フロントエンド実装で踏んだ制約 (このNext.js/Reactバージョン固有)
 

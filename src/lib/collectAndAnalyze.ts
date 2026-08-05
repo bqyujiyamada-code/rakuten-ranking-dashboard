@@ -11,6 +11,7 @@ import {
   getTrendDaily,
   getWeatherDaily,
   putDailyBundle,
+  putHighlights,
   putInsight,
   putRankingSnapshot,
   putTrendDaily,
@@ -65,6 +66,14 @@ export async function collectAndAnalyzeGenre(
   await putRankingSnapshot(genre.genreId, timestamp, currentItems);
   await advanceGenreMeta(genre.genreId, timestamp);
 
+  // Gemini分析の成否とは独立に、差分検知ができた時点でハイライトは必ず保存する。
+  // 以前はGemini呼び出しが成功した場合のみputInsightの一部として保存していたため、
+  // Gemini API障害時にランキング表の「変動」列・将来の長期分析用の生データが
+  // 丸ごと失われる問題があった(2026-08-05に実際に発生、CLAUDE.md参照)。
+  if (highlights.length > 0) {
+    await putHighlights(genre.genreId, timestamp, highlights);
+  }
+
   let aiAnalysisGenerated = false;
   if (highlights.length > 0) {
     try {
@@ -85,7 +94,7 @@ export async function collectAndAnalyzeGenre(
         dailyContext.weather,
         dailyContext.trend,
       );
-      await putInsight(genre.genreId, timestamp, trendAnalysisText, forecastText, highlights);
+      await putInsight(genre.genreId, timestamp, trendAnalysisText, forecastText);
       aiAnalysisGenerated = true;
     } catch (error) {
       console.error(

@@ -55,6 +55,27 @@ export interface InsightItem {
   timestamp: string;
   aiAnalysisText: string;
   forecastText?: string;
+  /**
+   * @deprecated 新規書き込みでは使わない(DiffHighlightsItem側に保存する。2026-08-06対応)。
+   * それより前に書き込まれた過去レコードには埋め込まれたままなので、読み取り時の
+   * 後方互換フォールバック用にoptionalで残している。
+   */
+  highlights?: DiffHighlightRecord[];
+  createdAt: string;
+}
+
+/**
+ * 差分ハイライト(ランキング表の「変動」列表示用)。差分検知ができた時点で、Gemini分析の
+ * 成否とは独立して必ず保存する。以前はInsightItemに同梱していたが、Gemini API障害時に
+ * putInsight自体が呼ばれず生データごと失われる問題があったため分離した(2026-08-06対応、
+ * CLAUDE.md参照)。将来、収集済みデータから季節性・長期トレンドを分析する際の基礎データ。
+ */
+export interface DiffHighlightsItem {
+  PK: string; // GENRE#{genreId}#HIGHLIGHTS
+  SK: string; // TS#{timestamp}
+  entityType: "DIFF_HIGHLIGHTS";
+  genreId: string;
+  timestamp: string;
   highlights: DiffHighlightRecord[];
   createdAt: string;
 }
