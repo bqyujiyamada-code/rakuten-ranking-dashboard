@@ -150,9 +150,24 @@ export function InsightCard({
               </p>
             )}
             {trend && (
-              <p className="mt-1.5 whitespace-pre-line text-xs leading-relaxed text-[var(--text-secondary)]">
-                {trend.summaryText}
-              </p>
+              <div className="mt-1.5 text-xs leading-relaxed">
+                {trend.summaryText.split("\n").map((line, i) => {
+                  if (line === "") return null;
+                  const isBullet = line.startsWith("・");
+                  return (
+                    <p
+                      key={i}
+                      className={
+                        isBullet
+                          ? "mt-2 font-semibold text-[var(--text-primary)] first:mt-0"
+                          : "text-[var(--text-secondary)]"
+                      }
+                    >
+                      {line}
+                    </p>
+                  );
+                })}
+              </div>
             )}
           </div>
         )}
