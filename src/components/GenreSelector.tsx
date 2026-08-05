@@ -5,6 +5,11 @@ export interface GenreOption {
   name: string;
 }
 
+/**
+ * 16件のジャンルをボタン(pill)で並べると数行にわたり縦のスペースを取りすぎるため、
+ * PC表示でも場所を取らないネイティブのプルダウンに変更した(HistoryDatePickerと
+ * 見た目を揃えている)。
+ */
 export function GenreSelector({
   genres,
   selectedGenreId,
@@ -15,31 +20,20 @@ export function GenreSelector({
   onSelect: (genreId: string) => void;
 }) {
   return (
-    <div
-      role="tablist"
-      aria-label="ジャンル選択"
-      className="flex flex-wrap gap-2"
-    >
-      {genres.map((genre) => {
-        const isSelected = genre.genreId === selectedGenreId;
-        return (
-          <button
-            key={genre.genreId}
-            type="button"
-            role="tab"
-            aria-selected={isSelected}
-            onClick={() => onSelect(genre.genreId)}
-            className={`rounded-full border px-4 py-1.5 text-sm font-medium transition-colors ${
-              isSelected
-                ? "border-transparent text-white"
-                : "border-[var(--border-hairline)] text-[var(--text-secondary)] hover:bg-[var(--surface-2)]"
-            }`}
-            style={isSelected ? { backgroundColor: "var(--series-1)" } : undefined}
-          >
+    <label className="flex items-center gap-2 text-sm">
+      <span className="text-[var(--text-secondary)]">ジャンル</span>
+      <select
+        aria-label="ジャンル選択"
+        value={selectedGenreId ?? ""}
+        onChange={(event) => onSelect(event.target.value)}
+        className="rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-1)] px-3 py-1.5 text-[var(--text-primary)]"
+      >
+        {genres.map((genre) => (
+          <option key={genre.genreId} value={genre.genreId}>
             {genre.name}
-          </button>
-        );
-      })}
-    </div>
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }

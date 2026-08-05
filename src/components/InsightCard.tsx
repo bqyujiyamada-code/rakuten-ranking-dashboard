@@ -1,6 +1,7 @@
 "use client";
 
 import type { DiffHighlightRecord } from "@/lib/db/types";
+import { formatJstDateLabel } from "@/lib/date/jst";
 
 export interface InsightData {
   timestamp: string;
@@ -8,6 +9,19 @@ export interface InsightData {
   forecastText?: string | null;
   highlights: DiffHighlightRecord[];
   createdAt: string;
+}
+
+export interface DailyContextWeather {
+  location: string;
+  tempMaxC: number;
+  tempMinC: number;
+  precipitationMm: number;
+  weatherLabel: string;
+}
+
+export interface DailyContextTrend {
+  summaryText: string;
+  sources: { title: string; uri: string }[];
 }
 
 function formatDateTime(value: string) {
@@ -24,28 +38,103 @@ function formatDateTime(value: string) {
 }
 
 /**
- * 表示日ピッカーで日付を選べるようになったため、常に「表示中の日の分析1件」だけを渡す想定
- * (呼び出し元のDashboard.tsxが&limit=1または&dateで1件に絞っている)。過去分をこのカード内で
- * 積み重ねて見せる必要が無くなったので、アコーディオンではなく常時展開の単一カードにしている。
+ * ニュース記事のリード文のように、最初の1文を見出し(太字・大きめ)として切り出し、
+ * 残りを本文として扱う。aiAnalysisTextは3〜4文の日本語プローズ(gemini.tsのプロンプト参照)
+ * のため、句点(「。」)で区切るだけで自然な見出し+本文になる。区切れない場合は全文を
+ * 見出し扱いにする。
  */
-export function InsightCard({ insight }: { insight: InsightData }) {
-  return (
-    <div className="rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-1)] p-5">
-      <p className="mb-3 text-xs text-[var(--text-muted)]">
-        {formatDateTime(insight.timestamp)} 時点の分析
-      </p>
-      <p className="mb-3 text-sm leading-relaxed text-[var(--text-primary)]">
-        {insight.aiAnalysisText}
-      </p>
+function splitHeadline(text: string): { headline: string; body: string } {
+  const idx = text.indexOf("。");
+  if (idx === -1 || idx === text.length - 1) {
+    return { headline: text, body: "" };
+  }
+  return { headline: text.slice(0, idx + 1), body: text.slice(idx + 1).trim() };
+}
 
-      {insight.forecastText && (
-        <div className="rounded-lg border border-dashed border-[var(--border-hairline)] bg-[var(--surface-2)] p-3">
-          <p className="mb-1 text-xs font-medium text-[var(--text-muted)]">
-            🔮 今後の予測
+/**
+ * ページ上部に全幅で表示する「本日のAIサマリー」カード。ニュースの見出し記事のような
+ * ビジュアル(見出し+本文+関連情報)にし、判断材料(気象・世間のトレンド)も同じカード内に
+ * まとめて表示する。表示日ピッカーで選べる日は常に1件のみのため、複数日分を積み重ねる
+ * アコーディオン等には戻さないこと(CLAUDE.md参照)。
+ */
+export function InsightCard({
+  insight,
+  genreName,
+  weather,
+  trend,
+  causalDate,
+}: {
+  insight: InsightData | null;
+  genreName: string;
+  weather?: DailyContextWeather | null;
+  trend?: DailyContextTrend | null;
+  causalDate?: string | null;
+}) {
+  const { headline, body } = insight
+    ? splitHeadline(insight.aiAnalysisText)
+    : { headline: "", body: "" };
+
+  return (
+    <div className="rounded-2xl border border-[var(--border-hairline)] bg-[var(--surface-1)] p-5 md:p-6">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <span
+          className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold text-white"
+          style={{ backgroundColor: "var(--series-1)" }}
+        >
+          📰 本日のAIサマリー
+        </span>
+        <span className="text-xs text-[var(--text-muted)]">
+          {genreName}
+          {insight ? ` ・ ${formatDateTime(insight.timestamp)}時点` : ""}
+        </span>
+      </div>
+
+      {insight ? (
+        <>
+          <p className="text-lg font-bold leading-snug text-[var(--text-primary)] md:text-xl">
+            {headline}
           </p>
-          <p className="text-sm leading-relaxed text-[var(--text-primary)]">
-            {insight.forecastText}
+          {body && (
+            <p className="mt-2 text-sm leading-relaxed text-[var(--text-secondary)]">{body}</p>
+          )}
+
+          {insight.forecastText && (
+            <div
+              className="mt-4 rounded-lg border-l-4 bg-[var(--surface-2)] py-2 pl-3 pr-3"
+              style={{ borderColor: "var(--series-2)" }}
+            >
+              <p className="mb-1 text-xs font-semibold" style={{ color: "var(--series-2)" }}>
+                🔮 今後の予測
+              </p>
+              <p className="text-sm leading-relaxed text-[var(--text-primary)]">
+                {insight.forecastText}
+              </p>
+            </div>
+          )}
+        </>
+      ) : (
+        <p className="text-sm text-[var(--text-muted)]">
+          このジャンルではまだ有意な変動が検知されていません。収集が2回以上行われると表示されます。
+        </p>
+      )}
+
+      {(weather || trend) && (
+        <div className="mt-4 border-t border-[var(--border-hairline)] pt-3">
+          <p className="mb-1.5 text-xs font-medium text-[var(--text-muted)]">
+            🌤 分析の判断材料
+            {causalDate ? ` (前日 ${formatJstDateLabel(causalDate)} の東京)` : ""}
           </p>
+          {weather && (
+            <p className="text-xs text-[var(--text-secondary)]">
+              最高{weather.tempMaxC}°C / 最低{weather.tempMinC}°C・降水量
+              {weather.precipitationMm}mm・{weather.weatherLabel}
+            </p>
+          )}
+          {trend && (
+            <p className="mt-1.5 whitespace-pre-line text-xs leading-relaxed text-[var(--text-secondary)]">
+              {trend.summaryText}
+            </p>
+          )}
         </div>
       )}
     </div>

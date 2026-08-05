@@ -4,28 +4,19 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { GenreSelector, type GenreOption } from "@/components/GenreSelector";
 import { RankingLeaderboard, type LeaderboardItem } from "@/components/RankingLeaderboard";
 import { RankingChart, type ChartItem } from "@/components/RankingChart";
-import { InsightCard, type InsightData } from "@/components/InsightCard";
+import {
+  InsightCard,
+  type InsightData,
+  type DailyContextWeather,
+  type DailyContextTrend,
+} from "@/components/InsightCard";
 import { HistoryDatePicker, type DateOption } from "@/components/HistoryDatePicker";
-import { formatJstDateLabel } from "@/lib/date/jst";
 import type { DiffHighlightRecord } from "@/lib/db/types";
 
 interface TimeSeriesPoint {
   timestamp: string;
   rank: number;
   price: number;
-}
-
-interface DailyContextWeather {
-  location: string;
-  tempMaxC: number;
-  tempMinC: number;
-  precipitationMm: number;
-  weatherLabel: string;
-}
-
-interface DailyContextTrend {
-  summaryText: string;
-  sources: { title: string; uri: string }[];
 }
 
 interface DailyContextData {
@@ -230,7 +221,7 @@ export function Dashboard() {
         </p>
       </header>
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <GenreSelector
           genres={genres}
           selectedGenreId={selectedGenreId}
@@ -243,9 +234,17 @@ export function Dashboard() {
         />
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-        <div className="min-w-0">
-          <h2 className="mb-2 text-sm font-semibold text-[var(--text-primary)]">
+      <InsightCard
+        insight={insights[0] ?? null}
+        genreName={selectedGenreName}
+        weather={dailyContext.weather}
+        trend={dailyContext.trend}
+        causalDate={dailyContext.causalDate}
+      />
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div className="min-w-0 flex flex-col gap-2">
+          <h2 className="text-sm font-semibold text-[var(--text-primary)]">
             {selectedGenreName ? `${selectedGenreName}のランキング` : "ランキング"}
             <span className="ml-2 font-normal text-[var(--text-muted)]">
               (商品を選択すると順位・価格の推移をグラフ表示)
@@ -260,45 +259,11 @@ export function Dashboard() {
           />
         </div>
 
-        <div className="flex flex-col gap-4">
-          <h2 className="text-sm font-semibold text-[var(--text-primary)]">
-            AIトレンド分析
-          </h2>
-
-          {(dailyContext.weather || dailyContext.trend) && (
-            <div className="rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-1)] p-4 text-sm">
-              <p className="mb-2 text-xs font-medium text-[var(--text-muted)]">
-                🌤 分析の判断材料
-                {dailyContext.causalDate
-                  ? ` (前日 ${formatJstDateLabel(dailyContext.causalDate)} の東京)`
-                  : ""}
-              </p>
-              {dailyContext.weather && (
-                <p className="text-[var(--text-primary)]">
-                  最高{dailyContext.weather.tempMaxC}°C / 最低
-                  {dailyContext.weather.tempMinC}°C・降水量
-                  {dailyContext.weather.precipitationMm}mm・{dailyContext.weather.weatherLabel}
-                </p>
-              )}
-              {dailyContext.trend && (
-                <p className="mt-2 whitespace-pre-line leading-relaxed text-[var(--text-secondary)]">
-                  {dailyContext.trend.summaryText}
-                </p>
-              )}
-            </div>
-          )}
-
-          {insights.length === 0 ? (
-            <div className="rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-1)] p-6 text-sm text-[var(--text-muted)]">
-              このジャンルではまだ有意な変動が検知されていません。収集が2回以上行われると表示されます。
-            </div>
-          ) : (
-            <InsightCard insight={insights[0]} />
-          )}
+        <div className="min-w-0 flex flex-col gap-2">
+          <h2 className="text-sm font-semibold text-[var(--text-primary)]">価格・順位の推移</h2>
+          <RankingChart item={chartItem} onClear={() => setSelectedItemCode(null)} />
         </div>
       </div>
-
-      <RankingChart item={chartItem} onClear={() => setSelectedItemCode(null)} />
     </div>
   );
 }
