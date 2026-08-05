@@ -423,12 +423,20 @@ Playwrightで実測して確認すること(旧`3fr:2fr`時代の636pxという�
   `{"framework":"nextjs"}`をPATCHし、再デプロイ(`vercel --prod`)して解消した。GitHub連携が
   通常のインポート画面を経由せず自動で行われた場合に起こりうるので、再発したら
   `vercel api /v9/projects/<project>` で`framework`フィールドを確認すること。
-- Cron Jobs (`vercel.json`)はHobbyプランのため1日1回まで。現在 `0 22 * * *` (UTC) = 毎日7:00 JST に
+- Cron Jobs (`vercel.json`)はHobbyプランのため1日1回まで。現在 `0 20 * * *` (UTC) = 毎日5:00 JST に
   `/api/cron/collect`を実行するよう設定・登録済み(`vercel crons ls`で確認可能)。
   **収集・分析ロジック(`src/lib/analysis/`, `src/lib/collectAndAnalyze.ts`等)を変更してpushしても、
-  その日のCronが既に実行済みなら反映は翌日7:00 JSTになる。** 「直したはずなのに変わっていない」と
+  その日のCronが既に実行済みなら反映は翌日5:00 JSTになる。** 「直したはずなのに変わっていない」と
   思ったら、まず該当ジャンルの最新インサイトのtimestampとデプロイ時刻の前後関係を確認すること。
   デプロイ自体が成功しているかは `vercel ls` / `vercel inspect <url>` で確認できる。
+- **実行時刻は元々 `0 22 * * *`(7:00 JST)だったが、2026-08-06に5:00 JSTへ変更した(対応31.参照)。**
+  `gemini-3-flash-preview`の応答が7:00 JST前後で慢性的に12秒予算(対応26.)を超過しAI分析が
+  ほぼ全滅する問題への対応として、米国時間帯を多少なりとも前にずらす狙いで2時間早めた。ただし
+  JST 1:00〜9:00のどの時刻を選んでも米国太平洋時間の日中帯(おおよそ9:00〜17:00 PDT)に収まって
+  しまうため、根本解決ではなく気休め程度の調整である可能性が高い(詳細な時間帯換算の考察は
+  対応31.参照)。翌日以降の自動収集で`aiAnalysisGenerated`の成功率に変化がないか確認し、
+  改善しなければGemini呼び出し自体のアーキテクチャ(並列化・タイムアウト再計算・軽量モデルへの
+  フォールバック等)の見直しを検討すること。
 - ローカルは`vercel link`済み(`.vercel/project.json`が存在)。`vercel env ls production` /
   `vercel logs <url>` / `vercel inspect <url> --logs` で本番環境変数やログを直接確認できる。
 
