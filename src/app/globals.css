@@ -22,6 +22,10 @@
   --status-warning: #fab219;
   --status-serious: #ec835a;
   --status-critical: #d03b3b;
+
+  /* 気温表示用の暖色/寒色ペア (dataviz skillの検証済みdiverging pair: blue ↔ red) */
+  --temp-warm: #e34948;
+  --temp-cool: #2a78d6;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -42,6 +46,9 @@
     --series-3: #199e70;
     --series-4: #c98500;
     --series-5: #d55181;
+
+    --temp-warm: #e66767;
+    --temp-cool: #3987e5;
   }
 }
 

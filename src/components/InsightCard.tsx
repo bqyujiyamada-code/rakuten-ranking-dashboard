@@ -144,9 +144,18 @@ export function InsightCard({
               )}
             </p>
             {weather && (
-              <p className="text-xs text-[var(--text-secondary)]">
-                最高{weather.tempMaxC}°C / 最低{weather.tempMinC}°C・降水量
-                {weather.precipitationMm}mm・{weather.weatherLabel}
+              <p className="flex flex-wrap items-center gap-x-1 gap-y-1 text-xs text-[var(--text-secondary)]">
+                <span>🌡️ 最高</span>
+                <strong className="tabular-nums" style={{ color: "var(--temp-warm)" }}>
+                  {weather.tempMaxC}°C
+                </strong>
+                <span>/ 最低</span>
+                <strong className="tabular-nums" style={{ color: "var(--temp-cool)" }}>
+                  {weather.tempMinC}°C
+                </strong>
+                <span>
+                  ・💧 降水量{weather.precipitationMm}mm・{weather.weatherLabel}
+                </span>
               </p>
             )}
             {trend && (
