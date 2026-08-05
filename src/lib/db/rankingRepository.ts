@@ -25,6 +25,8 @@ import {
   itemPk,
   itemSk,
   metaPk,
+  monthlyRollupPk,
+  monthlyRollupSk,
   trendPk,
   weatherPk,
 } from "@/lib/db/keys";
@@ -34,6 +36,7 @@ import type {
   DiffHighlightsItem,
   GenreMetaItem,
   InsightItem,
+  MonthlyRollupItem,
   RankingSnapshotItem,
   TrendDailyItem,
   WeatherDailyItem,
@@ -376,4 +379,53 @@ export async function listRecentDailyBundles(limit = 90): Promise<DailyBundleIte
     }),
   );
   return (result.Items ?? []) as DailyBundleItem[];
+}
+
+/**
+ * 月次ロールアップを保存。生データから都度フル再計算した結果を渡す想定のため、
+ * 常に上書き(冪等)。scripts/compute-monthly-rollup.mjsから呼ぶ想定
+ * (現状はスクリプト側で同等のロジックを自己完結的に複製しており、この関数自体は
+ * 将来のUI/APIフェーズで使う)。
+ */
+export async function putMonthlyRollup(
+  data: Omit<MonthlyRollupItem, "PK" | "SK" | "entityType" | "computedAt">,
+): Promise<void> {
+  const item: MonthlyRollupItem = {
+    PK: monthlyRollupPk(data.genreId),
+    SK: monthlyRollupSk(data.month),
+    entityType: "MONTHLY_ROLLUP",
+    ...data,
+    computedAt: new Date().toISOString(),
+  };
+  await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
+}
+
+export async function getMonthlyRollup(
+  genreId: string,
+  month: string,
+): Promise<MonthlyRollupItem | null> {
+  const result = await ddb.send(
+    new GetCommand({
+      TableName: TABLE_NAME,
+      Key: { PK: monthlyRollupPk(genreId), SK: monthlyRollupSk(month) },
+    }),
+  );
+  return (result.Item as MonthlyRollupItem | undefined) ?? null;
+}
+
+/** 指定ジャンルの月次ロールアップを古い順(月の昇順)に一覧取得 */
+export async function listMonthlyRollups(
+  genreId: string,
+  limit = 24,
+): Promise<MonthlyRollupItem[]> {
+  const result = await ddb.send(
+    new QueryCommand({
+      TableName: TABLE_NAME,
+      KeyConditionExpression: "PK = :pk",
+      ExpressionAttributeValues: { ":pk": monthlyRollupPk(genreId) },
+      ScanIndexForward: true,
+      Limit: limit,
+    }),
+  );
+  return (result.Items ?? []) as MonthlyRollupItem[];
 }

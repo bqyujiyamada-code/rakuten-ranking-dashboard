@@ -122,3 +122,32 @@ export interface DailyBundleItem {
   GSI2SK: string; // date と同じ
   createdAt: string;
 }
+
+/**
+ * 月次ロールアップ(ジャンル×JST暦月の集計値)。季節性・長期トレンド分析の土台となる
+ * 導出データで、その月の生データ(RankingSnapshotItem/DiffHighlightsItem/WeatherDailyItem)
+ * から都度フル再計算する(scripts/compute-monthly-rollup.mjs参照)。日次で積み上げる
+ * インクリメンタル方式ではないため、再計算しても冪等(同じ月を何度計算しても同じ結果になる)。
+ */
+export interface MonthlyRollupItem {
+  PK: string; // GENRE#{genreId}#ROLLUP
+  SK: string; // MONTH#{YYYY-MM}
+  entityType: "MONTHLY_ROLLUP";
+  genreId: string;
+  month: string; // "YYYY-MM" (JST暦月)
+  /** その月で実際に収集できた日数。30に満たない場合はデータ欠落(Cron障害等)の目安になる */
+  daysCollected: number;
+  priceStats: { avg: number; min: number; max: number };
+  /** ユニークなitemCode数 / (daysCollected * 30)。ジャンルの総入れ替わり傾向を月単位で見る指標 */
+  uniqueItemCount: number;
+  totalItemSlots: number;
+  highlightCounts: Record<DiffHighlightType, number>;
+  /** その月に対応するcausalDateの気象データが1件も無ければnull */
+  weather: {
+    avgTempMaxC: number;
+    avgTempMinC: number;
+    totalPrecipitationMm: number;
+    daysWithData: number;
+  } | null;
+  computedAt: string;
+}

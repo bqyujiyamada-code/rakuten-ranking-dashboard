@@ -17,7 +17,9 @@ Next.jsダッシュボードで可視化するアプリ。詳細な対応状況�
 ## ディレクトリ構成と役割
 
 ```
-scripts/create-table.mjs        DynamoDBテーブル+GSI作成 (npm run db:create-table)
+scripts/create-table.mjs           DynamoDBテーブル+GSI作成 (npm run db:create-table)
+scripts/backfill-daily-context.mjs 過去収集日のDAY#/WEATHER#を事後復元する一回限りのバックフィル
+scripts/compute-monthly-rollup.mjs ジャンル×月の集計(MonthlyRollupItem)を生データから再計算
 src/lib/config/env.ts           環境変数アクセサ (未設定なら例外を投げる)
 src/lib/aws/dynamodb.ts         DynamoDBDocumentClient
 src/lib/date/jst.ts             JST暦日ユーティリティ (toJstDateString/addDaysJst/formatJstDateLabel)
@@ -47,17 +49,19 @@ src/components/                 GenreSelector, HistoryDatePicker, RankingLeaderb
 
 ## DynamoDB 設計 (単一テーブル `RakutenRankings`)
 
-3種類のエンティティをPK/SKパターンで1テーブルに同居させている。
+複数種類のエンティティをPK/SKパターンで1テーブルに同居させている。
 
 | エンティティ | PK | SK | 用途 |
 |---|---|---|---|
 | ランキングitem | `GENRE#{genreId}#ITEM#{itemCode}` | `TS#{timestamp}` | 商品ごとの順位・価格の時系列 (`getItemTimeSeries`) |
 | GSI1 (上記の別引き) | `GENRE#{genreId}` | `TS#{timestamp}#RANK#{rank}` | ジャンル×時刻の順位表を取得 (`getSnapshotAtTimestamp`) |
 | ジャンルメタ | `GENRE#{genreId}#META` | `LATEST` | 直近2回分の収集timestampを保持し、差分検知の基準にする |
-| AIインサイト | `GENRE#{genreId}#INSIGHT` | `TS#{timestamp}` | Gemini生成コメント+差分ハイライトの履歴 |
+| AIインサイト | `GENRE#{genreId}#INSIGHT` | `TS#{timestamp}` | Gemini生成のトレンド考察・予測コメント |
+| 差分ハイライト | `GENRE#{genreId}#HIGHLIGHTS` | `TS#{timestamp}` | 差分検知の生データ。Gemini分析の成否とは独立に保存(対応27.参照) |
 | 気象(日次) | `WEATHER#{date}` | `DAILY` | 東京の実測気象データ。`date`はその気象が実際に発生したJST暦日 |
 | トレンド(日次) | `TREND#{date}` | `DAILY` | Gemini検索groundingによる世間のトレンド要約。`date`は要約対象のJST暦日 |
 | 日次バンドル索引 | `DAY#{date}` | `META` | ランキング収集日(`date`)から`timestamp`/`causalDate`を引く。GSI2でdate降順一覧も可能 |
+| 月次ロールアップ | `GENRE#{genreId}#ROLLUP` | `MONTH#{YYYY-MM}` | ジャンル×月の集計値(季節性・長期トレンド分析の土台、対応28.参照) |
 
 **差分検知の前提**: `collectAndAnalyzeGenre` は「ジャンルメタのlatestTimestamp」を前回スナップショットの
 timestampとして扱い、そのタイムスタンプでGSI1を引いて前回の順位表を再構成する。1つの収集バッチ内で
@@ -234,7 +238,7 @@ try/catchでは短縮できない**ため、この設計だけでは不十分だ
 **常に表示中の1日分だけを常時展開の単一カードで表示する**方式に単純化した。
 `Dashboard.tsx`側は、最新表示時は`/api/insights?genreId=...`(dateなし)、過去日表示時は
 `&date=`で、どちらも常に最大1件だけ取得する(`/api/insights`は元々`limit`パラメータを
-持っていたが、対応26.で「常に最大1件」の設計に合わせて廃止し、`GenreMeta.latestTimestamp`/
+持っていたが、対応27.で「常に最大1件」の設計に合わせて廃止し、`GenreMeta.latestTimestamp`/
 `DAY#{date}`バンドルからtimestampを1つ解決する方式に書き換えた)。`isLatest`のような
 分岐props・「最新」バッジも不要になったため削除している。ここを拡張する際、複数日分を
 1画面に積み重ねる縦積み/アコーディオン表示には戻さないこと(表示日の切り替えは
@@ -249,7 +253,7 @@ try/catchでは短縮できない**ため、この設計だけでは不十分だ
 (過去のインサイトのハイライトは現在の順位表と対応しないため使わない)。`InsightCard`は
 分析文・予測文のみを表示する。
 
-## 差分ハイライトの保存はGemini分析の成否から独立させている (対応26.)
+## 差分ハイライトの保存はGemini分析の成否から独立させている (対応27.)
 
 ユーザーから「1年分など長期でデータが溜まった際に季節性・長期トレンドを分析できるか」と
 問われたのをきっかけに、データ完全性の穴を1つ発見・修正した。
@@ -284,9 +288,42 @@ try/catchでは短縮できない**ため、この設計だけでは不十分だ
   「本日は変動を検知しましたが、AI分析コメントは取得できませんでした。ランキング表の
   「変動」列で内容をご確認いただけます。」と表示し、本文・予測・判断材料ブロックは
   出さない。ここを触る際、`aiAnalysisText`がnullになりうる前提を崩さないこと。
-- **未着手**: 週次/月次ロールアップの集計処理・専用のGemini長期分析呼び出し自体はまだ
-  実装していない(対応19.以来の既知の未実装事項、TODO.md参照)。今回はその前提となる
-  生データの完全性を担保しただけ。
+- この時点では月次ロールアップ(集計)自体はまだ実装しておらず、生データの完全性を
+  担保しただけだった。ロールアップは対応28.で実装済み(下記)。
+
+## 月次ロールアップ (季節性・長期トレンド分析の土台、対応28.)
+
+対応27.に続き、「1年分など長期でデータが溜まった際に季節性・長期トレンドを分析できるか」
+という問いへの対応として、ジャンル×JST暦月の集計値(`MonthlyRollupItem`)を実装した。
+**スコープはデータ層のみ**: AIによる長期分析文の生成・UI表示は行っていない(現在の実データは
+数週間分しかなく、AI分析やUIを作っても検証できないため、将来の別タスクとした)。
+
+- **エンティティ**: `GENRE#{genreId}#ROLLUP` / `MONTH#{YYYY-MM}`。集計する指標は
+  `daysCollected`(その月の収集日数)、`priceStats`(その月のtop30全アイテムの価格の
+  平均/最小/最大)、`uniqueItemCount`/`totalItemSlots`(ユニークitemCode数と全枠数。
+  楽天リアルタイムランキングの総入れ替わり傾向を月単位で定量化する指標)、
+  `highlightCounts`(差分ハイライトのtype別件数)、`weather`(その月の各収集日の
+  `causalDate`に対応する気象の平均・合計)。
+- **常に生データからフル再計算する(純粋な導出データ)。** 日次で少しずつ積み上げる
+  インクリメンタル方式ではなく、`scripts/compute-monthly-rollup.mjs`を実行した時点で
+  その月の生データ(GSI1のランキングスナップショット・`DiffHighlightsItem`・
+  `WeatherDailyItem`)から都度計算し直す。理由: (1)冪等性が保証される(同じ月を
+  何度再実行しても同じ結果になり、二重カウントの心配がない)、(2)集計ロジックを直しても
+  過去分に再適用できる、(3)日次収集Cron(対応26.でタイムアウト対策済みだが依然
+  300秒予算はタイト)に一切負荷を追加しない。
+- **スクリプトは`src/lib`からimportせず自己完結**(`scripts/backfill-daily-context.mjs`と
+  同じ流儀)。キー生成ロジック等を「同期させること」コメント付きで複製している。
+  `src/lib/db/keys.ts`/`types.ts`/`rankingRepository.ts`側にも
+  `monthlyRollupPk`/`MonthlyRollupItem`/`putMonthlyRollup`等を用意済みだが、
+  現状はスクリプトからは使っておらず、将来UI/APIフェーズで使う前提の先行実装。
+- **ハイライト集計の後方互換フォールバック**: `highlightCounts`は`DiffHighlightsItem`を
+  数える設計だが、対応27.のデコップリングより前に書き込まれた日は`DiffHighlightsItem`が
+  存在せず`InsightItem.highlights`に埋め込まれたままのため、スクリプト側にも
+  `/api/insights`と同じ後方互換フォールバック(`getHighlightsWithFallback`)を入れている。
+  これを入れずに実行すると、対応27.より前の月は`highlightCounts`が全て0になる不具合を
+  実際に確認したため(2026-08分で検証中に発覚)、削除しないこと。
+- **使い方**: `node scripts/compute-monthly-rollup.mjs --month=YYYY-MM [--genre=xxx] [--apply]`。
+  `--month`省略時は実行時点のJST暦月(進行中の月)。dry-run既定。
 
 ## フロントエンド実装で踏んだ制約 (このNext.js/Reactバージョン固有)
 

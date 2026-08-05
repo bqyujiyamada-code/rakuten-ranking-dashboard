@@ -86,3 +86,15 @@ export const DAILY_BUNDLE_GSI2PK = "DAILY_BUNDLE";
 export function dailyBundleGsi2Sk(date: string): string {
   return date;
 }
+
+/**
+ * 月次ロールアップ(ジャンル×JST暦月の集計値)のキー。生データ(ランキングスナップショット/
+ * ハイライト/気象)から常にフル再計算する導出データのため、追記ではなく都度上書きする。
+ */
+export function monthlyRollupPk(genreId: string): string {
+  return `GENRE#${genreId}#ROLLUP`;
+}
+
+export function monthlyRollupSk(month: string): string {
+  return `MONTH#${month}`; // month = "YYYY-MM" (JST暦月)
+}
