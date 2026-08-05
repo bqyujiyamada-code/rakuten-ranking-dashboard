@@ -56,6 +56,10 @@ function splitHeadline(text: string): { headline: string; body: string } {
  * ビジュアル(見出し+本文+関連情報)にし、判断材料(気象・世間のトレンド)も同じカード内に
  * まとめて表示する。表示日ピッカーで選べる日は常に1件のみのため、複数日分を積み重ねる
  * アコーディオン等には戻さないこと(CLAUDE.md参照)。
+ *
+ * カード全体をネイティブの<details>/<summary>で開閉可能にし、閉じた状態でも
+ * バッジ・ジャンル名・見出し(1文目)だけは常に見える(<summary>内に置く)。本文・予測・
+ * 判断材料は展開時のみ表示。既定は展開状態(open)。
  */
 export function InsightCard({
   insight,
@@ -75,68 +79,84 @@ export function InsightCard({
     : { headline: "", body: "" };
 
   return (
-    <div className="rounded-2xl border border-[var(--border-hairline)] bg-[var(--surface-1)] p-5 md:p-6">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <span
-          className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold text-white"
-          style={{ backgroundColor: "var(--series-1)" }}
-        >
-          📰 本日のAIサマリー
-        </span>
-        <span className="text-xs text-[var(--text-muted)]">
-          {genreName}
-          {insight ? ` ・ ${formatDateTime(insight.timestamp)}時点` : ""}
-        </span>
-      </div>
+    <details
+      open
+      className="group rounded-2xl border border-[var(--border-hairline)] bg-[var(--surface-1)] p-5 md:p-6"
+    >
+      <summary className="flex cursor-pointer list-none flex-col gap-3 [&::-webkit-details-marker]:hidden">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span
+            className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold text-white"
+            style={{ backgroundColor: "var(--series-1)" }}
+          >
+            📰 本日のAIサマリー
+          </span>
+          <span className="flex items-center gap-2 text-xs text-[var(--text-muted)]">
+            {genreName}
+            {insight ? ` ・ ${formatDateTime(insight.timestamp)}時点` : ""}
+            <span
+              className="inline-block transition-transform group-open:rotate-180"
+              aria-hidden
+            >
+              ▾
+            </span>
+          </span>
+        </div>
 
-      {insight ? (
-        <>
+        {insight ? (
           <p className="text-lg font-bold leading-snug text-[var(--text-primary)] md:text-xl">
             {headline}
           </p>
-          {body && (
-            <p className="mt-2 text-sm leading-relaxed text-[var(--text-secondary)]">{body}</p>
-          )}
-
-          {insight.forecastText && (
-            <div
-              className="mt-4 rounded-lg border-l-4 bg-[var(--surface-2)] py-2 pl-3 pr-3"
-              style={{ borderColor: "var(--series-2)" }}
-            >
-              <p className="mb-1 text-xs font-semibold" style={{ color: "var(--series-2)" }}>
-                🔮 今後の予測
-              </p>
-              <p className="text-sm leading-relaxed text-[var(--text-primary)]">
-                {insight.forecastText}
-              </p>
-            </div>
-          )}
-        </>
-      ) : (
-        <p className="text-sm text-[var(--text-muted)]">
-          このジャンルではまだ有意な変動が検知されていません。収集が2回以上行われると表示されます。
-        </p>
-      )}
-
-      {(weather || trend) && (
-        <div className="mt-4 border-t border-[var(--border-hairline)] pt-3">
-          <p className="mb-1.5 text-xs font-medium text-[var(--text-muted)]">
-            🌤 分析の判断材料
-            {causalDate ? ` (前日 ${formatJstDateLabel(causalDate)} の東京)` : ""}
+        ) : (
+          <p className="text-sm text-[var(--text-muted)]">
+            このジャンルではまだ有意な変動が検知されていません。収集が2回以上行われると表示されます。
           </p>
-          {weather && (
-            <p className="text-xs text-[var(--text-secondary)]">
-              最高{weather.tempMaxC}°C / 最低{weather.tempMinC}°C・降水量
-              {weather.precipitationMm}mm・{weather.weatherLabel}
+        )}
+      </summary>
+
+      <div className="mt-3">
+        {insight && body && (
+          <p className="text-sm leading-relaxed text-[var(--text-secondary)]">{body}</p>
+        )}
+
+        {insight?.forecastText && (
+          <div
+            className="mt-4 rounded-lg border-l-4 bg-[var(--surface-2)] py-2 pl-3 pr-3"
+            style={{ borderColor: "var(--series-2)" }}
+          >
+            <p className="mb-1 text-xs font-semibold" style={{ color: "var(--series-2)" }}>
+              🔮 今後の予測
             </p>
-          )}
-          {trend && (
-            <p className="mt-1.5 whitespace-pre-line text-xs leading-relaxed text-[var(--text-secondary)]">
-              {trend.summaryText}
+            <p className="text-sm leading-relaxed text-[var(--text-primary)]">
+              {insight.forecastText}
             </p>
-          )}
-        </div>
-      )}
-    </div>
+          </div>
+        )}
+
+        {(weather || trend) && (
+          <div className="mt-4 border-t border-[var(--border-hairline)] pt-3">
+            <p className="mb-1.5 text-sm font-bold" style={{ color: "var(--series-3)" }}>
+              🌤 分析の判断材料
+              {causalDate && (
+                <span className="ml-1 text-xs font-normal text-[var(--text-muted)]">
+                  (前日 {formatJstDateLabel(causalDate)} の東京)
+                </span>
+              )}
+            </p>
+            {weather && (
+              <p className="text-xs text-[var(--text-secondary)]">
+                最高{weather.tempMaxC}°C / 最低{weather.tempMinC}°C・降水量
+                {weather.precipitationMm}mm・{weather.weatherLabel}
+              </p>
+            )}
+            {trend && (
+              <p className="mt-1.5 whitespace-pre-line text-xs leading-relaxed text-[var(--text-secondary)]">
+                {trend.summaryText}
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+    </details>
   );
 }
