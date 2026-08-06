@@ -88,7 +88,7 @@ export function RankingLeaderboard({
                 <td className="px-3 py-2">
                   {highlight && meta && (
                     <span
-                      className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs"
+                      className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-xs"
                       style={{ borderColor: meta.color, color: meta.color }}
                       title={highlight.detail}
                     >

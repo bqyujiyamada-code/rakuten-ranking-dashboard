@@ -413,6 +413,22 @@ Playwrightで実測して確認すること(旧`3fr:2fr`時代の636pxという�
 はみ出しは`RankingLeaderboard`自身の`overflow-x-auto`コンテナ内に閉じ込められる。
 テーブルを含むgrid item を新設・変更する際はこの`min-w-0`を忘れないこと。
 
+### 「変動」列のバッジには`whitespace-nowrap`が必須 (table auto-layoutとCJK改行のズレ、対応32.)
+
+`RankingLeaderboard.tsx`の「変動」列のバッジ(pill状の`<span>`、`HIGHLIGHT_META`のラベル+
+`movementLabel`の変動幅を`shrink-0`のflexアイテムとして並べたもの)には**`whitespace-nowrap`が
+必須**。これが無いと、日本語テキストは任意の文字間で折り返し可能という前提で
+`table-layout: auto`(このテーブルは`table-fixed`を指定していない)の列幅自動計算がバッジの
+最小幅を実際より小さく見積もる一方、実際の描画時はflexアイテムが`shrink-0`のため折り返されず
+自然サイズのまま描画される。この不整合により、バッジの背景・ボーダー(pill)だけが列に割り当て
+られた狭い幅のままで、テキスト(特に`movementLabel`の"17→6位"のような2桁ランクの表記)が
+ボーダーの外にはみ出して見える不具合が実際の本番データ(魚介類・水産加工品ジャンル)で
+発生した。`whitespace-nowrap`を付けることで、自動レイアウトがバッジの自然幅を列の最小幅として
+正しく認識し、必要なら列(テーブル全体)がその分広がる(既存の`overflow-x-auto`コンテナが
+安全に吸収する、上記の`min-w-0`と同じ考え方)。**この列のバッジ内に新しい`<span>`を追加する際も、
+親のpill `<span>`に`whitespace-nowrap`が付いたままであることを確認すること**(`white-space`は
+子要素に継承されるため、個々の子`<span>`に付け直す必要はない)。
+
 ## Vercelデプロイの注意
 
 - プロジェクト: `bqyujiyamada-codes-projects/rakuten-ranking-dashboard` (Hobbyプラン)。本番URL:
