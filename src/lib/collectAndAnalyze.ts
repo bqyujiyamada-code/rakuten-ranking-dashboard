@@ -28,6 +28,12 @@ import type { DiffHighlightRecord } from "@/lib/db/types";
 // 楽天APIのレート制限 (概ね1リクエスト/秒) を踏まえたジャンル間インターバル
 const REQUEST_INTERVAL_MS = 1100;
 
+// フェーズ2 (Gemini分析) の同時実行数上限。楽天APIと異なりGeminiの正確な秒間/分間
+// レート制限はドキュメント化されていないため、16件全てを無条件に同時発火するのは
+// バースト起因の429/503を誘発するリスクがあると判断し、保守的にキャップしている。
+// 詳細な設計判断はCLAUDE.md参照。
+const GEMINI_ANALYSIS_CONCURRENCY = 8;
+
 export interface GenreCollectionResult {
   genreId: string;
   genreName: string;
@@ -44,12 +50,24 @@ export interface DailyContext {
 
 const EMPTY_DAILY_CONTEXT: DailyContext = { weather: null, trend: null };
 
-/** 1ジャンル分の「取得 → 差分検知 → AI分析 → 保存」パイプライン */
-export async function collectAndAnalyzeGenre(
+/** フェーズ1(取得→差分検知→保存)の結果。フェーズ2(Gemini分析)への引き継ぎ用 */
+interface GenrePreparation {
+  genre: GenreDefinition;
+  timestamp: string;
+  itemCount: number;
+  highlights: DiffHighlightRecord[];
+  error?: string;
+}
+
+/**
+ * フェーズ1: 1ジャンル分の「取得→差分検知→スナップショット/ハイライト保存」。
+ * 楽天APIのレート制限があるため呼び出し側で直列に実行される想定。Gemini呼び出しは
+ * 一切行わない(フェーズ2の`analyzeGenre`に分離、並行実行される)。
+ */
+async function prepareGenre(
   genre: GenreDefinition,
   timestamp: string,
-  dailyContext: DailyContext = EMPTY_DAILY_CONTEXT,
-): Promise<GenreCollectionResult> {
+): Promise<GenrePreparation> {
   const meta = await getGenreMeta(genre.genreId);
   const previousTimestamp = meta?.latestTimestamp ?? null;
 
@@ -74,8 +92,21 @@ export async function collectAndAnalyzeGenre(
     await putHighlights(genre.genreId, timestamp, highlights);
   }
 
+  return { genre, timestamp, itemCount: currentItems.length, highlights };
+}
+
+/**
+ * フェーズ2: フェーズ1で検知したハイライトをもとにGemini分析を行い保存する。
+ * 楽天APIのようなレート制限の制約が無いため、呼び出し側で並行実行される想定。
+ */
+async function analyzeGenre(
+  prep: GenrePreparation,
+  dailyContext: DailyContext,
+): Promise<GenreCollectionResult> {
+  const { genre, timestamp, itemCount, highlights, error: prepError } = prep;
   let aiAnalysisGenerated = false;
-  if (highlights.length > 0) {
+
+  if (!prepError && highlights.length > 0) {
     try {
       const previousInsight = await getLatestInsight(genre.genreId);
       // Geminiには件数・多様性を絞った部分集合のみ渡す。保存する highlights (ランキング表の
@@ -107,10 +138,45 @@ export async function collectAndAnalyzeGenre(
   return {
     genreId: genre.genreId,
     genreName: genre.name,
-    itemCount: currentItems.length,
+    itemCount,
     highlightCount: highlights.length,
     aiAnalysisGenerated,
+    error: prepError,
   };
+}
+
+/** 1ジャンル分の「取得→差分検知→AI分析→保存」を直列に行う(単発実行・テスト用途向け) */
+export async function collectAndAnalyzeGenre(
+  genre: GenreDefinition,
+  timestamp: string,
+  dailyContext: DailyContext = EMPTY_DAILY_CONTEXT,
+): Promise<GenreCollectionResult> {
+  const prep = await prepareGenre(genre, timestamp);
+  return analyzeGenre(prep, dailyContext);
+}
+
+/** 配列の各要素にfnを適用する。同時実行数をconcurrencyで制限する簡易ワーカープール */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker(): Promise<void> {
+    for (;;) {
+      const current = nextIndex;
+      nextIndex += 1;
+      if (current >= items.length) return;
+      results[current] = await fn(items[current]);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, () => worker()),
+  );
+  return results;
 }
 
 /**
@@ -172,13 +238,21 @@ async function getOrFetchTrendContext(date: string): Promise<TrendContext | null
 }
 
 /**
- * 全ての対象ジャンルを順番に収集・分析する (定期収集バッチのエントリポイント)。
+ * 全ての対象ジャンルを収集・分析する(定期収集バッチのエントリポイント)。
  * 1ジャンルの失敗が他ジャンルの処理を止めないよう、genre単位でエラーを捕捉する。
  *
  * 気象・トレンドは「前日(causalDate)分」を全ジャンル共通で1回だけ取得し、各ジャンルの
- * AI分析に渡す。収集時点(7時JST)では前日は既に終わっているため、Open-Meteoの実測値・
+ * AI分析に渡す。収集時点(5時JST)では前日は既に終わっているため、Open-Meteoの実測値・
  * Geminiのトレンド要約とも確定情報として即座に取得でき、追加の夜間バッチは不要
-  (詳細な設計理由はCLAUDE.md参照)。
+ * (詳細な設計理由はCLAUDE.md参照)。
+ *
+ * 2フェーズ構成(2026-08-05〜07の3日連続Gemini障害を受けて導入、詳細はCLAUDE.md参照):
+ * - フェーズ1(ランキング収集): 楽天APIのレート制限により直列。気象・トレンド取得は
+ *   これと独立なので、フェーズ1の待ち時間に相乗りさせるため並行して開始する。
+ * - フェーズ2(Gemini分析): 楽天APIのようなレート制限は無いため、
+ *   GEMINI_ANALYSIS_CONCURRENCY件ずつ並行実行する。以前は直列(1ジャンルずつ)だったため、
+ *   短いタイムアウトのfail-fastを16回積み上げるだけで300秒予算の大半を消費してしまい、
+ *   個々の呼び出しに十分な時間を与えられなかった。
  */
 export async function collectAndAnalyzeAllGenres(
   genres: GenreDefinition[] = TARGET_GENRES,
@@ -187,30 +261,27 @@ export async function collectAndAnalyzeAllGenres(
   const today = toJstDateString(new Date(timestamp));
   const causalDate = addDaysJst(today, -1);
 
-  const [weather, trend] = await Promise.all([
+  const dailyContextPromise: Promise<DailyContext> = Promise.all([
     getOrFetchWeatherContext(causalDate),
     getOrFetchTrendContext(causalDate),
-  ]);
-  const dailyContext: DailyContext = { weather, trend };
+  ]).then(([weather, trend]) => ({ weather, trend }));
 
-  const results: GenreCollectionResult[] = [];
-
+  // フェーズ1: 楽天APIのレート制限があるため直列。Gemini呼び出しはここでは行わない。
+  const preparations: GenrePreparation[] = [];
   for (let i = 0; i < genres.length; i += 1) {
     const genre = genres[i];
     try {
-      const result = await collectAndAnalyzeGenre(genre, timestamp, dailyContext);
-      results.push(result);
+      preparations.push(await prepareGenre(genre, timestamp));
     } catch (error) {
       console.error(
-        `[collect] Failed to process genre ${genre.genreId} (${genre.name})`,
+        `[collect] Failed to prepare genre ${genre.genreId} (${genre.name})`,
         error,
       );
-      results.push({
-        genreId: genre.genreId,
-        genreName: genre.name,
+      preparations.push({
+        genre,
+        timestamp,
         itemCount: 0,
-        highlightCount: 0,
-        aiAnalysisGenerated: false,
+        highlights: [],
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -220,6 +291,15 @@ export async function collectAndAnalyzeAllGenres(
       await new Promise((resolve) => setTimeout(resolve, REQUEST_INTERVAL_MS));
     }
   }
+
+  const dailyContext = await dailyContextPromise;
+
+  // フェーズ2: Gemini分析は並行実行する(GEMINI_ANALYSIS_CONCURRENCY件ずつ)。
+  const results = await mapWithConcurrency(
+    preparations,
+    GEMINI_ANALYSIS_CONCURRENCY,
+    (prep) => analyzeGenre(prep, dailyContext),
+  );
 
   try {
     await putDailyBundle(today, timestamp, causalDate);

@@ -5,12 +5,14 @@ import { stripMarkdown } from "@/lib/format/markdown";
 
 const MODEL = "gemini-3-flash-preview";
 
-// gemini.tsのGEMINI_HTTP_OPTIONSと同じ理由(SDK既定の5回リトライがVercel Hobbyの300秒予算を
-// 独り占めしうるため)でリトライを行わない。この呼び出しは1日1回だけなので、検索grounding分の
-// 余裕を見てタイムアウトはgenerateTrendInsightより長めにしている。
+// この呼び出しは`collectAndAnalyze.ts`でフェーズ1(楽天APIのランキング収集、レート制限に
+// より直列・概算70秒)と並行して開始されるため、フェーズ1の待ち時間にほぼ相乗りできる
+// (詳細はCLAUDE.md参照)。1日1回だけの呼び出しであることも踏まえ、gemini.tsの
+// GEMINI_HTTP_OPTIONSと同じ理由(SDK既定の5回リトライで予算を溶かさないため)で上限を
+// 明示的に2に固定した上で、検索grounding分の余裕を見てタイムアウトも伸ばしている。
 const TREND_HTTP_OPTIONS = {
-  timeout: 20_000,
-  retryOptions: { attempts: 1 },
+  timeout: 35_000,
+  retryOptions: { attempts: 2 },
 } as const;
 
 let client: GoogleGenAI | null = null;
