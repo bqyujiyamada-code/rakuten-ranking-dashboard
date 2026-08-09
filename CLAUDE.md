@@ -289,6 +289,52 @@ try/catchでは短縮できない**ため、この設計だけでは不十分だ
   追加しないと、失敗時も通知がスキップされるだけで収集自体はそのまま継続する(TODO.md
   未対応リスト参照)。ローカルの`.env.local`にも同様に設定すること。
 
+## 失敗した収集/分析の復旧 (自動リトライ + 手動トリガー)
+
+対応26./31./33.では、Gemini分析やトレンド要約が失敗するたびに「一時的な管理用APIルートをその場で
+新規作成→ローカルで本番DBに接続して実行→作業後にコミットせず削除」を毎回ゼロから繰り返していた。
+Slackアラート(上記)で「失敗に気づく」ことはできるようになったが、「直す」作業自体も恒久的な機能
+として持たせることにした。
+
+- **Vercel Hobbyでもcronジョブは複数(最大100個)持てる。** 対応9.時点では「Cronは1日1回まで」
+  という制約(公式ドキュメント`vercel.com/docs/cron-jobs/usage-and-pricing`の通り、これは
+  **1つのcronジョブの実行頻度**の上限であり、プロジェクトが持てるcronジョブ数の上限ではない)を
+  理由に収集+分析を1本のcronにまとめていたが、2本目のcronジョブを追加すること自体は問題ない。
+  これを踏まえ、`/api/cron/collect`(5:00 JST、ランキング収集+AI分析)とは別に、
+  `/api/cron/retry`(10:00 JST頃、自動リトライ専用)という2本目のcronジョブを`vercel.json`に
+  追加した。Hobbyのスケジューリング精度は「1時間単位、±59分」のため実際の発火は
+  10:00〜10:59 JSTの間になる。
+- **`retryFailedGenres()`(`src/lib/collectAndAnalyze.ts`)はランキング再取得・`GenreMeta`更新に
+  一切触れない設計。** `collectAndAnalyzeAllGenres`を同じJST日に再実行すると当日分のランキング
+  スナップショットが2重に作成され`GenreMeta.previousTimestamp`が書き換わって翌日の差分検知の
+  基準がずれてしまう(この制約は変わっていない)ため、リトライ対象はあくまで「既に保存済みの
+  スナップショット/ハイライトに対するGemini分析のやり直し」に限定している。この設計のおかげで
+  **何度実行しても安全(冪等)**であり、cronからの自動実行にもユーザーの手動実行にも同じ
+  エンドポイントをそのまま使い回せる。
+  - ジャンルごとに`GenreMeta.latestTimestamp`が本日(JST)のものか確認し、そうでなければ
+    「ランキング取得自体が失敗しており当日中は復旧不可(次回の日次Cronを待つしかない)」として
+    スキップする(`skipped-no-snapshot`)。このケースだけは自動リトライで直せない、既知の限界。
+  - 当日分の`InsightItem.aiAnalysisText`が既にあればスキップする(`skipped-already-ok`)。
+    これが冪等性の担保になっている(同じジャンルを何度リトライしても重複実行されない)。
+  - 「前回分析」(連続性用)は`getLatestInsight()`ではなく**`GenreMeta.previousTimestamp`を
+    明示的に使って`getInsightAtTimestamp`で引く**。対応31./33.で「`getLatestInsight()`だと
+    今まさに書き込んだ"本日分"を誤って前回として参照してしまう」バグを踏んだ教訓を踏襲している。
+  - 気象・トレンドも`getOrFetchWeatherContext`/`getOrFetchTrendContext`(既存、キャッシュ済みなら
+    再利用するだけ)で同じパスに乗せて再試行する。
+- **同じ`CRON_SECRET`でユーザーが手動でも安全に叩ける。** `/api/cron/retry`の認証は
+  `/api/cron/collect`と共通化した`src/lib/auth/cronAuth.ts`の`isAuthorizedCronRequest`を使っており、
+  仕組みは全く同じ。冪等なので、Slackアラートを見て「まだ直っていなさそう」と思ったタイミングで
+  `curl -H "Authorization: Bearer $CRON_SECRET" https://rakuten-ranking-dashboard.vercel.app/api/cron/retry`
+  を何度叩いても安全。
+- **Slackメッセージの詳細化**: `buildCronFailureMessage`(`src/lib/notify/cronAlert.ts`)は
+  ジャンル単位の失敗に加え、気象/トレンドの取得失敗も本文に含めるようにした
+  (`collectAndAnalyzeAllGenres`の戻り値を`GenreCollectionResult[]`から
+  `{ results, weather, trend }`に変更し、呼び出し元の`route.ts`に伝わるようにした)。
+  失敗の種類ごとに「自動リトライされます」/「自動リトライ対象外です」を明記し、
+  どれが放っておいて直るものか一目で分かるようにしてある。新設の`buildRetryOutcomeMessage`は
+  自動リトライ後にまだ残っている問題だけを報告する(全て解決していれば通知しない、既存の
+  「成功時は静かに」という方針を踏襲)。
+
 ## Geminiプロンプトの日付グラウンディング
 
 `src/lib/analysis/gemini.ts`のプロンプトには収集タイムスタンプから算出した本日の日付(JST)を

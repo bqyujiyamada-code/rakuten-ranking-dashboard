@@ -6,6 +6,8 @@ import { fetchDailyTrendSummary } from "@/lib/analysis/trendSummary";
 import {
   advanceGenreMeta,
   getGenreMeta,
+  getHighlightsAtTimestamp,
+  getInsightAtTimestamp,
   getLatestInsight,
   getSnapshotAtTimestamp,
   getTrendDaily,
@@ -46,6 +48,11 @@ export interface GenreCollectionResult {
 export interface DailyContext {
   weather: WeatherContext | null;
   trend: TrendContext | null;
+}
+
+/** collectAndAnalyzeAllGenresの戻り値。dailyContextもSlackアラートで使うため一緒に返す */
+export interface CollectionOutcome extends DailyContext {
+  results: GenreCollectionResult[];
 }
 
 const EMPTY_DAILY_CONTEXT: DailyContext = { weather: null, trend: null };
@@ -256,7 +263,7 @@ async function getOrFetchTrendContext(date: string): Promise<TrendContext | null
  */
 export async function collectAndAnalyzeAllGenres(
   genres: GenreDefinition[] = TARGET_GENRES,
-): Promise<GenreCollectionResult[]> {
+): Promise<CollectionOutcome> {
   const timestamp = new Date().toISOString();
   const today = toJstDateString(new Date(timestamp));
   const causalDate = addDaysJst(today, -1);
@@ -307,5 +314,112 @@ export async function collectAndAnalyzeAllGenres(
     console.error(`[collect] Failed to save daily bundle for date ${today}`, error);
   }
 
-  return results;
+  return { results, weather: dailyContext.weather, trend: dailyContext.trend };
+}
+
+export interface RetryGenreResult {
+  genreId: string;
+  genreName: string;
+  outcome:
+    | "succeeded"
+    | "failed"
+    | "skipped-no-snapshot"
+    | "skipped-already-ok"
+    | "skipped-no-highlights";
+  error?: string;
+}
+
+export interface RetryOutcome extends DailyContext {
+  today: string;
+  results: RetryGenreResult[];
+}
+
+/**
+ * 当日分でAI分析が未完了のジャンルだけを対象に、Gemini呼び出しだけを再試行する。
+ * ランキング再取得・GenreMeta更新には一切触れないため、何度実行しても安全(冪等)。
+ * `/api/cron/retry`(自動リトライcron・ユーザーの手動トリガー両方から)呼ばれる想定。
+ * 対応26./31./33.で毎回ゼロから作っていた一時的な復旧ルートを、恒久的な機能として
+ * 持たせたもの(詳細な設計判断はCLAUDE.md参照)。
+ */
+export async function retryFailedGenres(
+  genres: GenreDefinition[] = TARGET_GENRES,
+): Promise<RetryOutcome> {
+  const today = toJstDateString(new Date());
+  const causalDate = addDaysJst(today, -1);
+
+  const [weather, trend] = await Promise.all([
+    getOrFetchWeatherContext(causalDate),
+    getOrFetchTrendContext(causalDate),
+  ]);
+  const dailyContext: DailyContext = { weather, trend };
+
+  const results = await mapWithConcurrency(
+    genres,
+    GEMINI_ANALYSIS_CONCURRENCY,
+    async (genre): Promise<RetryGenreResult> => {
+      const meta = await getGenreMeta(genre.genreId);
+      if (!meta?.latestTimestamp || toJstDateString(new Date(meta.latestTimestamp)) !== today) {
+        return {
+          genreId: genre.genreId,
+          genreName: genre.name,
+          outcome: "skipped-no-snapshot",
+        };
+      }
+      const timestamp = meta.latestTimestamp;
+
+      const existingInsight = await getInsightAtTimestamp(genre.genreId, timestamp);
+      if (existingInsight?.aiAnalysisText) {
+        return {
+          genreId: genre.genreId,
+          genreName: genre.name,
+          outcome: "skipped-already-ok",
+        };
+      }
+
+      const highlightsItem = await getHighlightsAtTimestamp(genre.genreId, timestamp);
+      const highlights = highlightsItem?.highlights ?? [];
+      if (highlights.length === 0) {
+        return {
+          genreId: genre.genreId,
+          genreName: genre.name,
+          outcome: "skipped-no-highlights",
+        };
+      }
+
+      try {
+        const previousInsight = meta.previousTimestamp
+          ? await getInsightAtTimestamp(genre.genreId, meta.previousTimestamp)
+          : null;
+
+        const { trendAnalysisText, forecastText } = await generateTrendInsight(
+          genre.name,
+          selectHighlightsForGemini(highlights),
+          new Date(timestamp),
+          previousInsight
+            ? {
+                trendAnalysisText: previousInsight.aiAnalysisText,
+                forecastText: previousInsight.forecastText,
+              }
+            : null,
+          dailyContext.weather,
+          dailyContext.trend,
+        );
+        await putInsight(genre.genreId, timestamp, trendAnalysisText, forecastText);
+        return { genreId: genre.genreId, genreName: genre.name, outcome: "succeeded" };
+      } catch (error) {
+        console.error(
+          `[retry] Gemini analysis retry failed for genre ${genre.genreId}`,
+          error,
+        );
+        return {
+          genreId: genre.genreId,
+          genreName: genre.name,
+          outcome: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    },
+  );
+
+  return { today, weather, trend, results };
 }

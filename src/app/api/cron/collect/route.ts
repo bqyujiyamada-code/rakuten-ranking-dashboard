@@ -1,4 +1,4 @@
-import { env } from "@/lib/config/env";
+import { isAuthorizedCronRequest } from "@/lib/auth/cronAuth";
 import { collectAndAnalyzeAllGenres } from "@/lib/collectAndAnalyze";
 import { toJstDateString } from "@/lib/date/jst";
 import { buildCronFailureMessage } from "@/lib/notify/cronAlert";
@@ -17,23 +17,23 @@ import { notifySlack } from "@/lib/notify/slack";
 export const maxDuration = 300;
 
 export async function GET(request: Request) {
-  const secret = env.cron.secret;
-  if (secret) {
-    const authHeader = request.headers.get("authorization");
-    if (authHeader !== `Bearer ${secret}`) {
-      return Response.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  if (!isAuthorizedCronRequest(request)) {
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
-    const results = await collectAndAnalyzeAllGenres();
+    const { results, weather, trend } = await collectAndAnalyzeAllGenres();
 
-    const failureMessage = buildCronFailureMessage(results, toJstDateString(new Date()));
+    const failureMessage = buildCronFailureMessage(
+      results,
+      { weather, trend },
+      toJstDateString(new Date()),
+    );
     if (failureMessage) {
       await notifySlack(failureMessage);
     }
 
-    return Response.json({ collectedAt: new Date().toISOString(), results });
+    return Response.json({ collectedAt: new Date().toISOString(), results, weather, trend });
   } catch (error) {
     console.error("[cron/collect] Unexpected failure", error);
     const message = error instanceof Error ? error.message : "Unknown error";
