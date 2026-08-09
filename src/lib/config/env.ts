@@ -30,4 +30,8 @@ export const env = {
   cron: {
     secret: process.env.CRON_SECRET,
   },
+  notify: {
+    // 未設定でもCronの収集自体は継続できるべきなので required() は使わない
+    slackWebhookUrl: process.env.SLACK_WEBHOOK_URL,
+  },
 } as const;

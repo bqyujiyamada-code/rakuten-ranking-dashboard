@@ -612,6 +612,35 @@ Cronを7:00→5:00 JSTに前倒しした翌日にあたる。
   (翌日5:00 JST予定)が最初の機会になる。
 - 本番デプロイはこれから(ユーザーの判断待ち)。
 
+### 34. Cron失敗時のSlackアラート通知
+
+対応26./31./33.が「ユーザーがAIインサイト欠落に偶然気づいて報告→調査→手動復旧」という
+同じサイクルの繰り返しだったことを踏まえ、失敗をユーザーが気づく前に検知できるよう
+Slack通知を追加した。ユーザーと合意の上、通知先はSlack Incoming Webhook、アラート条件は
+「ジャンル単位で1件でも失敗があれば通知」(成功率の閾値ではない)とした。
+
+- `src/lib/notify/slack.ts`: Slack送信の薄いI/Oラッパー。`SLACK_WEBHOOK_URL`未設定時は
+  `console.warn`してno-op、送信自体が失敗しても例外を投げず`console.error`のみ(通知の失敗が
+  Cronのレスポンス・実際の収集結果に影響しないようにするため)。
+- `src/lib/notify/cronAlert.ts`: 「何を失敗とみなすか」を`buildCronFailureMessage(results, date)`
+  という純粋関数に分離。`result.error`(収集自体の失敗)、または
+  `highlightCount > 0 && !aiAnalysisGenerated`(ハイライト検知後のAI分析失敗)を検出する。
+  `highlightCount === 0`(変動なしで元々Gemini呼び出しを行っていない正常系)は失敗として
+  扱わない。DB/ネットワーク非依存のため`node --experimental-strip-types`でロジック単体を
+  検証済み(全成功→null、収集失敗あり、AI分析失敗あり、変動なしのみ、の4パターン)。
+- `src/app/api/cron/collect/route.ts`: 収集結果を`buildCronFailureMessage`に渡し、
+  該当があれば`notifySlack`。外側の`catch`(バッチ全体が例外を投げた場合)にも追加し、
+  部分的失敗だけでなく致命的な完全失敗も通知するようにした。
+- `src/lib/config/env.ts`: `SLACK_WEBHOOK_URL`を`notify.slackWebhookUrl`としてオプション項目
+  で追加(`required()`は使わない。未設定でも収集自体は継続すべきため)。
+- ローカルの簡易HTTPサーバーをモックSlack webhookとして使い、(1)未設定時は例外を投げず
+  スキップ、(2)設定時に実際にPOSTされ内容が正しい、(3)webhookが到達不能でも例外を投げず
+  ログのみ、の3パターンを確認済み。`tsc --noEmit`/`eslint`/`next build`もパス。
+- **既知の限界**: Vercelの300秒実行時間上限でCron自体が強制終了する完全タイムアウト
+  (対応26.のケース)は、この仕組みでは検知できない(後処理コード自体が実行されないため)。
+  ユーザーと合意した「ジャンル単位の失敗」のスコープ外として意図的に対応していない。
+- 本番デプロイ・`SLACK_WEBHOOK_URL`のVercel環境変数設定はこれから(未対応リスト参照)。
+
 ## 未対応 (実運用前に必要)
 
 - [x] `iam/dynamodb-policy.json`の内容(`UpdateTable`権限+`GSI2_DailyBundle`のARN)を
@@ -657,8 +686,12 @@ Cronを7:00→5:00 JSTに前倒しした翌日にあたる。
   2026-08-07も同じ失敗パターン(和菓子1件のみ成功)が再現し、時間帯要因ではなく
   `gemini-3-flash-preview`自体の全般的な高負荷/劣化である可能性が濃厚と判断(対応33.)。
   Gemini呼び出しの並行化によるアーキテクチャ改善は対応33.で実装済み。以下は残タスク:
-  - [ ] 対応33.の並行化(`GEMINI_ANALYSIS_CONCURRENCY`=8・timeout延長・attempts:2)を
+  - [x] 対応33.の並行化(`GEMINI_ANALYSIS_CONCURRENCY`=8・timeout延長・attempts:2)を
     本番デプロイし、次回以降の自動収集(Cronは1日1回)で`aiAnalysisGenerated`の成功率が
-    実際に改善するか確認する(ローカルではランキング2重書き込みを避けるため未検証)
+    実際に改善するか確認する → 2026-08-07〜09の3日連続で16/16ジャンルとも成功(気象・トレンドも
+    正常取得)を`/api/insights`・`/api/daily-context`で確認済み。対応31./33.のパターン
+    (和菓子1件のみ成功)は再現していない
   - [ ] 改善が不十分な場合、軽量モデルへのフォールバック(`gemini-3-flash-preview`失敗時に
-    別モデルで再試行する等)を検討する
+    別モデルで再試行する等)を検討する → 3日連続成功により緊急度は下がったが未着手のまま
+- [ ] 対応34.の`SLACK_WEBHOOK_URL`をVercel本番環境変数に追加する(ユーザー側対応)。
+  未設定の間はアラート対象の失敗があっても通知がスキップされるだけで収集自体は継続する

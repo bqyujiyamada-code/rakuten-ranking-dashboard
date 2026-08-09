@@ -1,5 +1,8 @@
 import { env } from "@/lib/config/env";
 import { collectAndAnalyzeAllGenres } from "@/lib/collectAndAnalyze";
+import { toJstDateString } from "@/lib/date/jst";
+import { buildCronFailureMessage } from "@/lib/notify/cronAlert";
+import { notifySlack } from "@/lib/notify/slack";
 
 /**
  * 定期収集バッチのエントリポイント。
@@ -24,12 +27,19 @@ export async function GET(request: Request) {
 
   try {
     const results = await collectAndAnalyzeAllGenres();
+
+    const failureMessage = buildCronFailureMessage(results, toJstDateString(new Date()));
+    if (failureMessage) {
+      await notifySlack(failureMessage);
+    }
+
     return Response.json({ collectedAt: new Date().toISOString(), results });
   } catch (error) {
     console.error("[cron/collect] Unexpected failure", error);
-    return Response.json(
-      { error: error instanceof Error ? error.message : "Unknown error" },
-      { status: 500 },
+    const message = error instanceof Error ? error.message : "Unknown error";
+    await notifySlack(
+      `:rotating_light: [楽天ランキングダッシュボード] Cron収集バッチが致命的エラーで停止しました - ${message}`,
     );
+    return Response.json({ error: message }, { status: 500 });
   }
 }

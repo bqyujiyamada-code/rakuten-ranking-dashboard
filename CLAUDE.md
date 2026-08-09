@@ -248,6 +248,46 @@ try/catchでは短縮できない**ため、この設計だけでは不十分だ
   (`tsc`/`eslint`/`next build`と、並行実行ワーカープール`mapWithConcurrency`単体の
   ロジック検証のみで確認済み)。実際の効果検証は本番デプロイ後、次回以降の自動Cron実行を待つ
   必要がある。
+- **その後の実地検証(対応33.デプロイ後)**: 本番`/api/insights`・`/api/daily-context`を
+  2026-08-07〜09の3日分で確認したところ、3日連続で16/16ジャンルとも`aiAnalysisText`/
+  `forecastText`/ハイライトが揃っており、気象・トレンドも取得できていた。各日とも16ジャンルが
+  同一timestampを共有しており(スナップショット2重書き込みは発生していない)、対応31./33.で
+  発生していた「和菓子1件のみ成功、残り15件null」というパターンは再現していない。並行化の
+  効果は実データで確認できたと言える。
+
+## Cron失敗時のSlack通知
+
+対応26./31./33.は、いずれも「ユーザーがAIインサイトの欠落に偶然気づいて報告→調査→手動復旧」
+というサイクルの繰り返しだった。並行化(対応33.、上記参照)で成功率は改善したが、
+`gemini-3-flash-preview`側の高負荷自体は解消していないため、同じパターンが再発しても
+今のままでは気づく手段が「ユーザーが偶然気づく」以外に無い。これに対応するため、Cronの収集結果に
+失敗があれば自動でSlack Incoming Webhookへ通知する仕組みを追加した。
+
+- **通知の仕組み(I/O)とアラート判定(ロジック)を分離**: `src/lib/notify/slack.ts`の
+  `notifySlack(text)`は薄い送信ラッパーで、`SLACK_WEBHOOK_URL`(`env.notify.slackWebhookUrl`)が
+  未設定なら`console.warn`してno-op、設定されていれば`AbortSignal.timeout(10_000)`付きで
+  POSTする。**送信自体が失敗しても例外は投げない**(`try/catch`で握りつぶし`console.error`のみ)。
+  通知の失敗がCronのレスポンスや実際の収集結果に影響してはならないため。
+  「何を失敗とみなすか」は`src/lib/notify/cronAlert.ts`の`buildCronFailureMessage(results, date)`
+  に分離してあり、DB/ネットワーク依存の無い純粋関数のため`node --experimental-strip-types`で
+  ロジックだけを直接テストできる(`diff.ts`の`detectDiffHighlights`と同じ設計方針)。
+- **アラート条件はジャンル単位: 1件でも失敗があれば通知する**(成功率の閾値ではない、
+  ユーザーと合意の上で決定)。`GenreCollectionResult`の既存フィールドのみで判定できる:
+  - `result.error`が truthy → ランキング取得/保存自体の失敗(`prepareGenre`が例外)
+  - `result.highlightCount > 0 && !result.aiAnalysisGenerated` → ハイライトを検知しGemini
+    呼び出しを試みたはずなのに失敗。**`highlightCount === 0`は「変動なしで元々Gemini呼び出しを
+    行っていない」正常系なので失敗として扱わない**(`analyzeGenre`の実装を参照。ここを混同すると
+    誤検知だらけになる)。
+  - `src/app/api/cron/collect/route.ts`の外側`catch`(バッチ全体が例外を投げた場合)にも
+    `notifySlack`を追加してあり、部分的失敗だけでなく致命的な完全失敗も通知する。
+- **既知の限界: 完全なCronタイムアウトは検知できない。** 2026-08-05(対応26.)のような
+  「Vercelの300秒実行時間上限でCron自体が強制終了し、この通知コードを含む後処理が一切
+  実行されない」ケースは、この仕組みでは検知できない。外部からのハートビート監視が別途
+  必要になるが、今回はユーザーと合意した「ジャンル単位で1件でも失敗したら通知」のスコープ外
+  として意図的に対応していない。
+- **本番環境変数の設定はユーザー側対応が必要**: `SLACK_WEBHOOK_URL`をVercel本番環境変数に
+  追加しないと、失敗時も通知がスキップされるだけで収集自体はそのまま継続する(TODO.md
+  未対応リスト参照)。ローカルの`.env.local`にも同様に設定すること。
 
 ## Geminiプロンプトの日付グラウンディング
 
