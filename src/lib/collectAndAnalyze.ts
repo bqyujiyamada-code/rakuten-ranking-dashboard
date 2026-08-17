@@ -163,7 +163,7 @@ export async function collectAndAnalyzeGenre(
 }
 
 /** 配列の各要素にfnを適用する。同時実行数をconcurrencyで制限する簡易ワーカープール */
-async function mapWithConcurrency<T, R>(
+export async function mapWithConcurrency<T, R>(
   items: T[],
   concurrency: number,
   fn: (item: T) => Promise<R>,

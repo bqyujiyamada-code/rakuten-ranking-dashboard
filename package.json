@@ -2,12 +2,14 @@
   "name": "rakuten-ranking-dashboard",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
+    "test": "find src/lib -name '*.test.ts' -print0 | xargs -0 node --experimental-strip-types --test",
     "db:create-table": "node scripts/create-table.mjs"
   },
   "dependencies": {

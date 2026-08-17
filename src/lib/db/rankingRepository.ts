@@ -381,11 +381,26 @@ export async function listRecentDailyBundles(limit = 90): Promise<DailyBundleIte
   return (result.Items ?? []) as DailyBundleItem[];
 }
 
+/** 指定月(YYYY-MM)に実際に収集できた日付一覧をGSI2_DailyBundleから取得(日付昇順) */
+export async function listDailyBundlesForMonth(
+  month: string,
+): Promise<DailyBundleItem[]> {
+  const result = await ddb.send(
+    new QueryCommand({
+      TableName: TABLE_NAME,
+      IndexName: GSI2_NAME,
+      KeyConditionExpression: "GSI2PK = :pk AND begins_with(GSI2SK, :month)",
+      ExpressionAttributeValues: { ":pk": DAILY_BUNDLE_GSI2PK, ":month": month },
+    }),
+  );
+  const items = (result.Items ?? []) as DailyBundleItem[];
+  return items.sort((a, b) => a.date.localeCompare(b.date));
+}
+
 /**
  * 月次ロールアップを保存。生データから都度フル再計算した結果を渡す想定のため、
- * 常に上書き(冪等)。scripts/compute-monthly-rollup.mjsから呼ぶ想定
- * (現状はスクリプト側で同等のロジックを自己完結的に複製しており、この関数自体は
- * 将来のUI/APIフェーズで使う)。
+ * 常に上書き(冪等)。scripts/compute-monthly-rollup.mjsおよびsrc/lib/analysis/monthlyRollup.ts
+ * (対応36.、/api/cron/monthly-rollupによる自動計算)から呼ばれる。
  */
 export async function putMonthlyRollup(
   data: Omit<MonthlyRollupItem, "PK" | "SK" | "entityType" | "computedAt">,

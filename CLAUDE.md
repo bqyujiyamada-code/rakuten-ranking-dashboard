@@ -19,10 +19,12 @@ Next.jsダッシュボードで可視化するアプリ。詳細な対応状況�
 ```
 scripts/create-table.mjs           DynamoDBテーブル+GSI作成 (npm run db:create-table)
 scripts/backfill-daily-context.mjs 過去収集日のDAY#/WEATHER#を事後復元する一回限りのバックフィル
-scripts/compute-monthly-rollup.mjs ジャンル×月の集計(MonthlyRollupItem)を生データから再計算
+scripts/backfill-price-types.mjs   文字列型で残っていた価格を数値型に変換する一回限りのバックフィル
+scripts/compute-monthly-rollup.mjs ジャンル×月の集計(MonthlyRollupItem)を生データから再計算 (手動実行用)
 src/lib/config/env.ts           環境変数アクセサ (未設定なら例外を投げる)
 src/lib/aws/dynamodb.ts         DynamoDBDocumentClient
-src/lib/date/jst.ts             JST暦日ユーティリティ (toJstDateString/addDaysJst/formatJstDateLabel)
+src/lib/auth/cronAuth.ts        /api/cron/* 共通の認証チェック (CRON_SECRET)
+src/lib/date/jst.ts             JST暦日/暦月ユーティリティ (toJstDateString/addDaysJst/currentJstMonth/previousJstMonth/formatJstDateLabel)
 src/lib/db/
   keys.ts                       PK/SK/GSIキー生成ロジック (単一テーブル設計)
   types.ts                      DynamoDBアイテムの型定義
@@ -38,13 +40,19 @@ src/lib/analysis/
   diff.ts                       前回スナップショットとの差分検知
   gemini.ts                     Geminiによるトレンド考察生成 (気象/トレンド因果分析込み)
   trendSummary.ts                Gemini Google Search groundingによる世間のトレンド要約
+  monthlyRollup.ts               ジャンル×月の集計(MonthlyRollupItem)算出ロジック (cron/monthly-rollupから使用)
 src/lib/format/
   itemName.ts                   商品名冒頭の販促文言を表示用に除去 (displayItemName)
   highlight.ts                  差分ハイライトのバッジ表示用ラベル・色定義
   markdown.ts                   Geminiテキストに混入するMarkdown記法を除去 (stripMarkdown)
+src/lib/notify/
+  slack.ts                      Slack Incoming Webhook送信の薄いI/Oラッパー (notifySlack)
+  cronAlert.ts                  Cron結果から通知すべき失敗を判定する純粋関数群
 src/lib/collectAndAnalyze.ts    「取得→気象/トレンド取得→差分検知→AI分析→保存」のオーケストレーション
 src/app/api/
-  cron/collect/route.ts         定期収集バッチのエントリポイント
+  cron/collect/route.ts         定期収集バッチのエントリポイント (5:00 JST)
+  cron/retry/route.ts           当日分の失敗ジャンルだけを再試行する自動リトライ (10:00 JST頃、冪等)
+  cron/monthly-rollup/route.ts  月次ロールアップの自動再計算 (12:00 JST頃、冪等)
   genres/route.ts, rankings/route.ts, insights/route.ts  ダッシュボード用API (&date=でバックナンバー対応)
   dates/route.ts                 収集済み日付一覧 (バックナンバー選択用)
   daily-context/route.ts         指定日の気象・トレンド(判断材料)取得
@@ -460,6 +468,25 @@ Slackアラート(上記)で「失敗に気づく」ことはできるように�
 - **使い方**: `node scripts/compute-monthly-rollup.mjs --month=YYYY-MM [--genre=xxx] [--apply]`。
   `--month`省略時は実行時点のJST暦月(進行中の月)。dry-run既定。
 
+**運用は3本目のcron(`/api/cron/monthly-rollup`、12:00 JST頃、対応36.)による自動化に
+決定・実装済み。** `src/lib/analysis/monthlyRollup.ts`が`scripts/compute-monthly-rollup.mjs`
+と同じ集計ロジックを`rankingRepository.ts`の既存関数を使う形でsrc/lib化しており、
+`computeAndSaveMonthlyRollupForMonth(month, genreIds)`を当月分・前月分の両方に対して毎回
+呼ぶ(月初のタイミングで前月最終日までのデータを確実に反映させるため。フル再計算方式
+のため再計算しても結果は安定する)。スクリプト版(`compute-monthly-rollup.mjs`)は
+特定月・特定ジャンルだけを手動で確認したい場合向けに引き続き残してある。両者のロジックが
+乖離しないよう、`computeRollupForGenre`を変更する際はスクリプト側にも同じ変更を反映すること
+(スクリプトはsrc/libをimportしない自己完結の流儀のため、自動での同期はできない)。
+失敗時は`buildMonthlyRollupFailureMessage`(`cronAlert.ts`)でSlack通知するが、生データの
+再集計に過ぎず翌日の自動実行で再試行されるだけのため、収集失敗通知(`buildCronFailureMessage`)
+より緊急度は下げてある。
+
+季節性・長期トレンドをAIに語らせる専用のGemini呼び出しや、ロールアップ結果を見せるUIは、
+対応36.時点でも意図的に未着手。理由は対応28.時点と同じで、実データがまだ3週間強
+(2026-07-29〜)しか無く、季節性分析を実装しても検証できるだけのデータが無いため。
+データ層(月次ロールアップ)を自動で溜め続ける体制は整ったので、数ヶ月分のデータが
+溜まった段階でこの2つに着手すること。
+
 ## フロントエンド実装で踏んだ制約 (このNext.js/Reactバージョン固有)
 
 このプロジェクトの`eslint-plugin-react-hooks`は通常より厳しいルールが有効になっている。
@@ -581,8 +608,17 @@ npm run dev            # 開発サーバー
 npm run build           # 本番ビルド
 npm run typecheck       # tsc --noEmit
 npm run lint            # eslint
+npm test                # src/lib配下の*.test.tsを実行 (node --experimental-strip-types --test、対応37.)
 npm run db:create-table # DynamoDBテーブル+GSIを作成 (既存ならスキップ)
 ```
+
+**テスト(対応37.)は新規フレームワークを増やさず、Node組み込みの`node:test`を使っている。**
+対象はDB/外部APIに依存しない純粋関数のみ(`diff.ts`/`cronAlert.ts`/`format/*`/`date/jst.ts`)。
+DB依存のロジック(`monthlyRollup.ts`等)は対象外で、実データでの動作確認はPlaywright/curl等で
+都度行う既存方針のまま。テストファイルは`*.test.ts`として対象モジュールの隣に置き、
+`.ts`拡張子付きの相対importを書く(Node ESM実行に必須。`tsconfig.json`の
+`allowImportingTsExtensions`はこのため)。新しい純粋関数を追加する際は、対応するテストの
+追加を検討すること。
 
 `.env.local.example` を `.env.local` にコピーし、`RAKUTEN_APP_ID` / `RAKUTEN_ACCESS_KEY` /
 `GEMINI_API_KEY` / AWS認証情報 / `CRON_SECRET` を設定してから起動する。AWS認証情報が無い状態でも

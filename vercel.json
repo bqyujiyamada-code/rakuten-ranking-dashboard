@@ -7,6 +7,10 @@
     {
       "path": "/api/cron/retry",
       "schedule": "0 1 * * *"
+    },
+    {
+      "path": "/api/cron/monthly-rollup",
+      "schedule": "0 3 * * *"
     }
   ]
 }

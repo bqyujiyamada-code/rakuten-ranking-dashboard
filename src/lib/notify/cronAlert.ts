@@ -3,6 +3,7 @@ import type {
   GenreCollectionResult,
   RetryOutcome,
 } from "@/lib/collectAndAnalyze";
+import type { MonthlyRollupMonthResult } from "@/lib/analysis/monthlyRollup";
 
 const RETRY_SCHEDULE_LABEL = "10:00 JST頃";
 
@@ -95,5 +96,28 @@ export function buildRetryOutcomeMessage(retryOutcome: RetryOutcome): string | n
   return [
     `:rotating_light: [楽天ランキングダッシュボード] ${retryOutcome.today}: 自動リトライ後も${allIssues.length}件が未解決です。手動での確認をお願いします`,
     ...allIssues,
+  ].join("\n");
+}
+
+/**
+ * `/api/cron/monthly-rollup`(対応36.)の結果を検査し、失敗したジャンルがあれば
+ * Slackへ通知するメッセージを組み立てる。全月・全ジャンルとも成功していればnullを返す
+ * (既存の「成功時は静かに」方針を踏襲)。月次ロールアップは生データからの導出データの
+ * 再計算に過ぎず、失敗しても翌日の自動実行(冪等)で再試行されるだけなので、
+ * buildCronFailureMessageほど緊急度の高い文面にはしていない。
+ */
+export function buildMonthlyRollupFailureMessage(
+  monthResults: MonthlyRollupMonthResult[],
+): string | null {
+  const failures = monthResults.flatMap((monthResult) =>
+    monthResult.genres
+      .filter((g) => g.outcome === "failed")
+      .map((g) => `- ${monthResult.month} / ${g.genreId}: ${g.error ?? "不明なエラー"}`),
+  );
+  if (failures.length === 0) return null;
+
+  return [
+    `:warning: [楽天ランキングダッシュボード] 月次ロールアップ計算で${failures.length}件失敗 (翌日の自動実行で再試行されます)`,
+    ...failures,
   ].join("\n");
 }

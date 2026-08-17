@@ -31,6 +31,19 @@ export function addDaysJst(dateStr: string, deltaDays: number): string {
   return toJstDateString(noonUtc);
 }
 
+/** 現在時刻のJST暦月を "YYYY-MM" 形式にする */
+export function currentJstMonth(): string {
+  return toJstDateString(new Date()).slice(0, 7);
+}
+
+/** "YYYY-MM" (JST暦月) の前月を "YYYY-MM" 形式にする */
+export function previousJstMonth(month: string): string {
+  const [year, monthNum] = month.split("-").map(Number);
+  const prev = new Date(Date.UTC(year, monthNum - 1, 1));
+  prev.setUTCMonth(prev.getUTCMonth() - 1);
+  return `${prev.getUTCFullYear()}-${String(prev.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
 /** "YYYY-MM-DD" (JST暦日) を日本語の日付ラベルにする (例: 2026年8月3日月曜日) */
 export function formatJstDateLabel(dateStr: string): string {
   const [year, month, day] = dateStr.split("-").map(Number);
