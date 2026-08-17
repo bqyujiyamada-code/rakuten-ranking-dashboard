@@ -8,6 +8,7 @@ import {
   putMonthlyRollup,
 } from "@/lib/db/rankingRepository";
 import type { DailyBundleItem, DiffHighlightRecord, DiffHighlightType } from "@/lib/db/types";
+import { mapWithConcurrency } from "@/lib/collectAndAnalyze";
 
 const HIGHLIGHT_TYPES: DiffHighlightType[] = [
   "NEW_ENTRY",
@@ -17,6 +18,14 @@ const HIGHLIGHT_TYPES: DiffHighlightType[] = [
   "PRICE_UP",
 ];
 const ITEMS_PER_SNAPSHOT = 30;
+
+// DynamoDBへの同時クエリ数を抑えるための上限。対応38.で発見: ジャンル単位・日単位とも
+// 無制限にPromise.allしていたため、当月・前月2ヶ月分×16ジャンル×最大31日×3クエリで
+// 最大3000件近いQueryがほぼ同時発火しうる設計になっていた。楽天API呼び出し(完全直列)・
+// Gemini呼び出し(GEMINI_ANALYSIS_CONCURRENCY=8)には明示的な同時実行数の上限を設けている
+// 既存の設計方針(CLAUDE.md参照)に合わせ、ここにも上限を設ける。
+const GENRE_CONCURRENCY = 4;
+const DAY_CONCURRENCY = 6;
 
 /**
  * 対応27.のDiffHighlightsItem分離より前に書き込まれた日はDiffHighlightsItemが存在せず、
@@ -51,30 +60,28 @@ export async function computeRollupForGenre(
   ) as Record<DiffHighlightType, number>;
   const weatherSamples: { tempMaxC: number; tempMinC: number; precipitationMm: number }[] = [];
 
-  await Promise.all(
-    dailyBundles.map(async (bundle) => {
-      const [snapshot, highlights, weather] = await Promise.all([
-        getSnapshotAtTimestamp(genreId, bundle.timestamp),
-        getHighlightsWithFallback(genreId, bundle.timestamp),
-        getWeatherDaily(addDaysJst(bundle.date, -1)),
-      ]);
+  await mapWithConcurrency(dailyBundles, DAY_CONCURRENCY, async (bundle) => {
+    const [snapshot, highlights, weather] = await Promise.all([
+      getSnapshotAtTimestamp(genreId, bundle.timestamp),
+      getHighlightsWithFallback(genreId, bundle.timestamp),
+      getWeatherDaily(addDaysJst(bundle.date, -1)),
+    ]);
 
-      for (const item of snapshot) {
-        if (typeof item.price === "number") prices.push(item.price);
-        if (item.itemCode) itemCodes.add(item.itemCode);
-      }
-      for (const highlight of highlights) {
-        if (highlight.type in highlightCounts) highlightCounts[highlight.type] += 1;
-      }
-      if (weather) {
-        weatherSamples.push({
-          tempMaxC: weather.tempMaxC,
-          tempMinC: weather.tempMinC,
-          precipitationMm: weather.precipitationMm,
-        });
-      }
-    }),
-  );
+    for (const item of snapshot) {
+      if (typeof item.price === "number") prices.push(item.price);
+      if (item.itemCode) itemCodes.add(item.itemCode);
+    }
+    for (const highlight of highlights) {
+      if (highlight.type in highlightCounts) highlightCounts[highlight.type] += 1;
+    }
+    if (weather) {
+      weatherSamples.push({
+        tempMaxC: weather.tempMaxC,
+        tempMinC: weather.tempMinC,
+        precipitationMm: weather.precipitationMm,
+      });
+    }
+  });
 
   const daysCollected = dailyBundles.length;
   const priceStats = prices.length
@@ -139,8 +146,10 @@ export async function computeAndSaveMonthlyRollupForMonth(
     return { month, daysCollected: 0, genres: [] };
   }
 
-  const genres = await Promise.all(
-    genreIds.map(async (genreId): Promise<MonthlyRollupGenreResult> => {
+  const genres = await mapWithConcurrency(
+    genreIds,
+    GENRE_CONCURRENCY,
+    async (genreId): Promise<MonthlyRollupGenreResult> => {
       try {
         const rollup = await computeRollupForGenre(genreId, month, dailyBundles);
         await putMonthlyRollup(rollup);
@@ -153,7 +162,7 @@ export async function computeAndSaveMonthlyRollupForMonth(
           error: error instanceof Error ? error.message : String(error),
         };
       }
-    }),
+    },
   );
 
   return { month, daysCollected: dailyBundles.length, genres };

@@ -100,11 +100,14 @@ export function RankingLeaderboard({
                   )}
                 </td>
                 <td className="px-3 py-2">
+                  {/* stopPropagationは付けない: target="_blank"のため別タブで開く動作と、
+                      クリックが親<tr>のonClickまでbubbleして選択される動作は独立して両立する。
+                      以前はstopPropagationしていたため、最も広く目立つこの列をクリックしても
+                      グラフ選択が反応しないUXバグになっていた(対応38.参照)。 */}
                   <a
                     href={item.itemUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    onClick={(event) => event.stopPropagation()}
                     className="line-clamp-1 hover:underline"
                     title={item.itemName}
                   >

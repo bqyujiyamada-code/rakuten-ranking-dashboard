@@ -89,15 +89,25 @@ async function prepareGenre(
     : [];
 
   await putRankingSnapshot(genre.genreId, timestamp, currentItems);
-  await advanceGenreMeta(genre.genreId, timestamp);
 
   // Gemini分析の成否とは独立に、差分検知ができた時点でハイライトは必ず保存する。
   // 以前はGemini呼び出しが成功した場合のみputInsightの一部として保存していたため、
   // Gemini API障害時にランキング表の「変動」列・将来の長期分析用の生データが
   // 丸ごと失われる問題があった(2026-08-05に実際に発生、CLAUDE.md参照)。
+  //
+  // advanceGenreMetaは必ずこれより後に呼ぶこと。先にmetaを進めてしまうと、
+  // putHighlightsがここで失敗した場合に「今日分のスナップショットは存在するが
+  // ハイライトだけ無い」状態になり、retryFailedGenresがこれを「ハイライト0件=
+  // 変動なしの正常系」と区別できず、誰にも気づかれないまま当日の「変動」列・
+  // AI分析が永久欠落するバグを実際に踏んだ(対応38.参照)。この順序であれば、
+  // putHighlights失敗時はmetaが進んでおらず例外がそのままprepareGenre全体を
+  // 失敗させるため、既存のerror系(自動リトライ対象外・次回の日次Cronで再試行)
+  // が正しく機能する。
   if (highlights.length > 0) {
     await putHighlights(genre.genreId, timestamp, highlights);
   }
+
+  await advanceGenreMeta(genre.genreId, timestamp);
 
   return { genre, timestamp, itemCount: currentItems.length, highlights };
 }

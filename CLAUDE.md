@@ -433,6 +433,17 @@ Slackアラート(上記)で「失敗に気づく」ことはできるように�
   出さない。ここを触る際、`aiAnalysisText`がnullになりうる前提を崩さないこと。
 - この時点では月次ロールアップ(集計)自体はまだ実装しておらず、生データの完全性を
   担保しただけだった。ロールアップは対応28.で実装済み(下記)。
+- **対応27.で塞いだはずの「Gemini障害でハイライトが失われる」問題と同根の穴が、書き込み
+  順序の別箇所に残っていた(対応38.で修正済み)。** `prepareGenre`(`collectAndAnalyze.ts`)は
+  元々`putRankingSnapshot`→`advanceGenreMeta`(GenreMeta.latestTimestampを本日に更新)→
+  `putHighlights`の順で書き込んでいた。この順序だと`advanceGenreMeta`成功後に
+  `putHighlights`だけがネットワーク瞬断等で失敗した場合、「今日分のスナップショットは
+  存在するがハイライトだけ無い」状態になり、`retryFailedGenres`がこれを「ハイライト0件=
+  変動なしの正常系」と区別できないため、当日の「変動」列・AI分析が誰にも気づかれず
+  永久欠落する。**`advanceGenreMeta`は必ず`putHighlights`より後に呼ぶこと。** この順序なら
+  `putHighlights`失敗時はmetaが進んでおらず、例外がそのまま`prepareGenre`全体を失敗させる
+  ため、既存の「自動リトライ対象外・次回の日次Cronで再試行」というerror系の扱いが正しく
+  機能する。この並び順を変更する際は、この不変条件(`advanceGenreMeta`は最後)を崩さないこと。
 
 ## 月次ロールアップ (季節性・長期トレンド分析の土台、対応28.)
 
@@ -467,6 +478,15 @@ Slackアラート(上記)で「失敗に気づく」ことはできるように�
   実際に確認したため(2026-08分で検証中に発覚)、削除しないこと。
 - **使い方**: `node scripts/compute-monthly-rollup.mjs --month=YYYY-MM [--genre=xxx] [--apply]`。
   `--month`省略時は実行時点のJST暦月(進行中の月)。dry-run既定。
+- **DynamoDBへの同時クエリ数に上限を設けている(対応38.)。** `src/lib/analysis/monthlyRollup.ts`
+  は当初、ジャンル単位・日単位とも無制限の`Promise.all`で書かれており、当月・前月2ヶ月分×
+  16ジャンル×最大31日×3クエリで最大3000件近いQueryがほぼ同時発火しうる設計になっていた。
+  楽天API(完全直列)・Gemini(`GEMINI_ANALYSIS_CONCURRENCY=8`)には明示的な同時実行数の
+  上限を設けている既存の設計方針と矛盾していたため、`collectAndAnalyze.ts`から`export`した
+  `mapWithConcurrency`を使い、ジャンル単位(`GENRE_CONCURRENCY=4`)・日単位
+  (`DAY_CONCURRENCY=6`)の2段階で上限を設けた。`scripts/compute-monthly-rollup.mjs`
+  (手動実行スクリプト側)は`src/lib`をimportしない自己完結の流儀のため、この修正は反映
+  していない(スクリプトは元々`--genre`で1ジャンルずつ実行する使い方が主なので実害は薄い)。
 
 **運用は3本目のcron(`/api/cron/monthly-rollup`、12:00 JST頃、対応36.)による自動化に
 決定・実装済み。** `src/lib/analysis/monthlyRollup.ts`が`scripts/compute-monthly-rollup.mjs`

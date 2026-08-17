@@ -762,6 +762,67 @@ Slack通知を追加した。ユーザーと合意の上、通知先はSlack Inc
   - 34件のテストが全てパス。`tsc --noEmit`/`eslint`/`next build`もパス。dev serverの起動も
     `type: "module"`追加後に問題ないことを確認済み。
 
+### 38. セキュリティ・ロジック・UIの3観点レビューと、指摘4件の修正
+
+ユーザーから「セキュリティ・UI・ロジックの観点で改善すべき点はあるか」と問われ、3つの
+サブエージェントを並行させて実コードを読ませるレビューを実施した(実装は行わせず調査のみ)。
+指摘のうち以下4件について、ユーザーの指示を受けて修正した。
+
+- **[セキュリティ] 公開APIが生のエラーメッセージを返していた**: `/api/rankings`・
+  `/api/insights`・`/api/dates`・`/api/daily-context`(いずれも無認証)は
+  `catch (error) { ... error.message ... }`を`Response.json`でそのまま返しており、
+  DynamoDB障害時にIAMユーザーのARN(AWSアカウントID含む)等の内部情報が匿名の呼び出し元に
+  漏れる経路になっていた。4ファイルとも、サーバー側の`console.error`はそのまま残し、
+  クライアントへのレスポンスは`{ error: "Internal error" }`に丸めた。フロントエンド側は
+  いずれも`response.error`の中身を読んでおらず(空状態にフォールバックするだけ)、
+  影響が無いことを確認済み。
+- **[ロジック] ハイライト書き込み失敗が「変動なし」と誤認され、誰にも気づかれず永久欠落する
+  バグ**: `collectAndAnalyze.ts`の`prepareGenre`が`putRankingSnapshot`→`advanceGenreMeta`
+  (GenreMeta.latestTimestampを本日に更新)→`putHighlights`の順で書き込んでいたため、
+  `advanceGenreMeta`成功後に`putHighlights`だけが失敗すると、「今日分のスナップショットは
+  存在するがハイライトだけ無い」状態になり、`retryFailedGenres`がこれを「ハイライト0件=
+  変動なしの正常系」と区別できなかった。対応27.で塞いだはずの「Gemini障害でハイライトが
+  失われる」問題と同根の穴が、書き込み順序の別箇所に残っていた。
+  `advanceGenreMeta`を`putHighlights`の後に呼ぶよう並び替えるだけで解決: この順序なら
+  `putHighlights`失敗時はmetaが進んでおらず、例外がそのまま`prepareGenre`全体を失敗させる
+  ため、既存の「自動リトライ対象外・次回の日次Cronで再試行」というerror系の扱いが正しく
+  機能する(`putRankingSnapshot`済みのスナップショット自体は孤立データとして残るが、実害は
+  無い)。
+- **[ロジック] 月次ロールアップ計算に同時実行数の上限が無かった**: `monthlyRollup.ts`は
+  ジャンル単位・日単位ともに無制限の`Promise.all`で、当月・前月2ヶ月分×16ジャンル×最大31日
+  ×3クエリで最大3000件近いDynamoDB Queryがほぼ同時発火しうる設計になっていた。楽天API
+  (完全直列)・Gemini(`GEMINI_ANALYSIS_CONCURRENCY=8`)には明示的な同時実行数の上限を
+  設けている既存の設計方針と矛盾していたため、`collectAndAnalyze.ts`から`export`した
+  `mapWithConcurrency`を使い、ジャンル単位(`GENRE_CONCURRENCY=4`)・日単位
+  (`DAY_CONCURRENCY=6`)の2段階で上限を設けた(最大同時クエリ数は概算144件まで低減)。
+  ローカル(本番DynamoDB接続)で`/api/cron/monthly-rollup`を再実行し、実行時間が同程度
+  (約3.5秒)のまま、保存された値(価格統計・ハイライト件数・気象)が修正前と完全一致する
+  ことを確認済み(冪等な再計算のため、同時実行数を変えても結果は変わらないはず、という
+  期待通りの挙動)。
+- **[UI] ランキング表の商品名列(最も広く目立つ列)をクリックしても選択されない**:
+  `RankingLeaderboard.tsx`の商品名`<a>`タグに付いていた`onClick={(e) => e.stopPropagation()}`
+  が、行の`onClick`(グラフ選択)への伝播を止めていた。`target="_blank"`によるリンクの
+  別タブ表示と、クリックが親`<tr>`までbubbleして選択される動作は本来独立しており競合しない
+  ため、単純に`stopPropagation`を削除して解決した。Playwrightで実際に商品名をクリックし、
+  ラジオボタンが選択状態になりグラフが表示されることを確認済み。
+
+修正後、`tsc --noEmit`/`eslint`/`npm test`(34件)/`next build`は全てパス。
+本番デプロイはこれから(ユーザーの判断待ち)。
+
+**レビューで指摘されたが今回は未対応の項目**(優先度が下がると判断、または別途対応検討):
+- [セキュリティ] `cronAuth.ts`が`CRON_SECRET`未設定時に無条件で許可するfail-open設計。
+  本番・ローカルとも設定済みで実害はないが、設定漏れを検知できない
+- [セキュリティ] `itemUrl`のスキーム未検証、セキュリティヘッダー(CSP等)未設定
+- [ロジック] `client.ts`の未使用関数`fetchAllTargetGenreRankings`と、`REQUEST_INTERVAL_MS`
+  定数が2箇所に重複している件
+- [UI] 選択済みradioを直接クリックしても解除されない(ネイティブradioの仕様)
+- [UI] 過去日表示時もAIサマリー見出しが「本日のAIサマリー」のまま
+- [UI] 商品選択直後、ローディング表示なしで空白のグラフ枠が一瞬出る
+- [UI] 値上げ/上昇バッジの文字色がWCAG AAコントラスト未達
+- [UI/配置] AIサマリーが縦に長くランキング表がファーストビューから外れる、「変動」バッジと
+  「順位」列の情報重複、グラフ未選択時の空白が目立つ、という3点はユーザーへの意見として
+  伝えたのみで、修正は行っていない
+
 ## 未対応 (実運用前に必要)
 
 - [x] `iam/dynamodb-policy.json`の内容(`UpdateTable`権限+`GSI2_DailyBundle`のARN)を
@@ -827,3 +888,18 @@ Slack通知を追加した。ユーザーと合意の上、通知先はSlack Inc
     別モデルで再試行する等)を検討する → 3日連続成功により緊急度は下がったが未着手のまま
 - [x] 対応34.の`SLACK_WEBHOOK_URL`は本番Vercel環境変数・ローカル`.env.local`とも既に
   設定済みであることを対応36.で確認済み(TODO.mdの記録漏れだった)
+- [ ] 対応38.のセキュリティ・ロジック・UIレビューで指摘されたが未対応の項目:
+  - [ ] `cronAuth.ts`が`CRON_SECRET`未設定時に無条件許可するfail-open設計。本番では
+    未設定時に401にする(fail-closed)方が安全
+  - [ ] `itemUrl`のスキーム未検証(http(s)限定にする)、セキュリティヘッダー(CSP等)未設定
+  - [ ] `client.ts`の未使用関数`fetchAllTargetGenreRankings`の削除、`REQUEST_INTERVAL_MS`
+    定数の重複(client.ts/collectAndAnalyze.tsの2箇所)の一本化
+  - [ ] ランキング表: 選択済みradioを直接クリックしても解除されない(ネイティブradioの仕様、
+    行の余白クリックでは解除できるため場所によって挙動が異なる)
+  - [ ] `InsightCard`: 過去日表示時もバッジが「本日のAIサマリー」のまま(閲覧中の日付と矛盾)
+  - [ ] 商品選択直後、`/api/rankings`のレスポンス到着までローディング表示が無く空白のグラフ
+    枠が一瞬表示される
+  - [ ] 値上げ/上昇バッジの文字色(`--status-warning`/`--status-good`)がライトモードで
+    WCAG AAコントラスト比(4.5:1)未達
+  - [ ] (任意・レイアウト意見)AIサマリーが縦に長くランキング表がファーストビューから外れる、
+    「変動」バッジと「順位」列の情報重複、グラフ未選択時の空白領域が目立つ、の3点

@@ -49,7 +49,7 @@ export async function GET(request: Request) {
   } catch (error) {
     console.error("[api/daily-context] Failed", error);
     return Response.json(
-      { error: error instanceof Error ? error.message : "Unknown error" },
+      { error: "Internal error" },
       { status: 500 },
     );
   }
