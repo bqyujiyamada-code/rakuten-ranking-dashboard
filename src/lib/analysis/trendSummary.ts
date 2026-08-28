@@ -3,15 +3,22 @@ import { env } from "@/lib/config/env";
 import { formatJstDateLabel } from "@/lib/date/jst";
 import { stripMarkdown } from "@/lib/format/markdown";
 
-const MODEL = "gemini-3-flash-preview";
+// 2026-08-28: `gemini-3-flash-preview`(preview版)が慢性的に高負荷で、googleSearch
+// grounding付きの呼び出しが 503(high demand)/504(DEADLINE_EXCEEDED)をほぼ毎回返し、
+// 世間のトレンド要約が collect / retry の両cronで取得できなくなっていた(本番ログで確認)。
+// GA版の`gemini-3.5-flash`はgrounding付きでも 18〜27秒程度で安定して成功する(実測4/4)ため
+// こちらへ切り替えた。responseSchema(構造化出力)は引き続きgoogleSearchと同時利用できない
+// ので、gemini.tsとは別のプレーンテキスト呼び出しとして分離する設計は変えていない。
+const MODEL = "gemini-3.5-flash";
 
 // この呼び出しは`collectAndAnalyze.ts`でフェーズ1(楽天APIのランキング収集、レート制限に
 // より直列・概算70秒)と並行して開始されるため、フェーズ1の待ち時間にほぼ相乗りできる
 // (詳細はCLAUDE.md参照)。1日1回だけの呼び出しであることも踏まえ、gemini.tsの
 // GEMINI_HTTP_OPTIONSと同じ理由(SDK既定の5回リトライで予算を溶かさないため)で上限を
-// 明示的に2に固定した上で、検索grounding分の余裕を見てタイムアウトも伸ばしている。
+// 明示的に2に固定した上で、検索grounding分の余裕を見てタイムアウトも伸ばしている
+// (実測で応答に27秒近くかかることがあるため45秒)。
 const TREND_HTTP_OPTIONS = {
-  timeout: 35_000,
+  timeout: 45_000,
   retryOptions: { attempts: 2 },
 } as const;
 
