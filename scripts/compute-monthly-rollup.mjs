@@ -42,6 +42,112 @@ const TARGET_GENRE_IDS = [
 const HIGHLIGHT_TYPES = ["NEW_ENTRY", "RANK_SURGE", "RANK_DROP", "PRICE_DROP", "PRICE_UP"];
 const ITEMS_PER_SNAPSHOT = 30;
 
+// --- src/lib/analysis/rollupMetrics.ts と同期させること (対応42.) ---
+const ROLLUP_MAX_NAME_KEYWORDS = 40;
+const ROLLUP_MAX_TOP_ITEMS = 40;
+const SEASONAL_PHRASES = [
+  "お中元", "御中元", "お歳暮", "御歳暮", "母の日", "父の日", "敬老の日",
+  "土用の丑", "恵方巻", "暑中見舞い", "残暑見舞い", "お花見", "年越し",
+  "お正月", "お盆", "ひな祭り", "こどもの日", "ハロウィン",
+];
+const KEYWORD_STOPWORDS = new Set([
+  "送料無料", "送料込", "ポイント", "楽天", "クーポン", "セール", "特価",
+  "割引", "まとめ買い", "在庫", "予約", "数量限定", "期間限定", "ランキング",
+  "あす楽", "配送", "のし", "ラッピング",
+  "kg", "ml", "cc", "mg", "mm", "cm", "oz", "lb",
+]);
+const TOKEN_RE = /[ァ-ヶー・]{2,}|[一-鿿々]{2,}|[A-Za-z][A-Za-z0-9]+/g;
+
+function extractNameKeywords(name) {
+  const found = new Set();
+  let rest = name;
+  for (const phrase of SEASONAL_PHRASES) {
+    if (rest.includes(phrase)) {
+      found.add(phrase);
+      rest = rest.split(phrase).join(" ");
+    }
+  }
+  TOKEN_RE.lastIndex = 0;
+  let match;
+  while ((match = TOKEN_RE.exec(rest)) !== null) {
+    const raw = match[0];
+    const term = /[A-Za-z]/.test(raw) ? raw.toLowerCase() : raw;
+    if (term.length < 2) continue;
+    if (KEYWORD_STOPWORDS.has(term)) continue;
+    found.add(term);
+  }
+  return [...found];
+}
+
+function summariseMonthlySnapshots(dailySnapshots) {
+  const keywordItemCodes = new Map();
+  const keywordOccurrences = new Map();
+  const items = new Map();
+
+  for (const day of dailySnapshots) {
+    for (const row of day) {
+      if (!row.itemCode) continue;
+      const rank = Number(row.rank);
+      const existing = items.get(row.itemCode);
+      if (existing) {
+        existing.daysPresent += 1;
+        existing.rankSum += rank;
+        existing.bestRank = Math.min(existing.bestRank, rank);
+        if (row.itemName) existing.itemName = row.itemName;
+      } else {
+        items.set(row.itemCode, {
+          itemName: row.itemName,
+          daysPresent: 1,
+          rankSum: rank,
+          bestRank: rank,
+        });
+      }
+      for (const term of extractNameKeywords(row.itemName)) {
+        keywordOccurrences.set(term, (keywordOccurrences.get(term) ?? 0) + 1);
+        let codes = keywordItemCodes.get(term);
+        if (!codes) {
+          codes = new Set();
+          keywordItemCodes.set(term, codes);
+        }
+        codes.add(row.itemCode);
+      }
+    }
+  }
+
+  const nameKeywords = [...keywordOccurrences.entries()]
+    .map(([term, occurrences]) => ({
+      term,
+      occurrences,
+      itemCount: keywordItemCodes.get(term)?.size ?? 0,
+    }))
+    .sort(
+      (a, b) =>
+        b.itemCount - a.itemCount ||
+        b.occurrences - a.occurrences ||
+        a.term.localeCompare(b.term),
+    )
+    .slice(0, ROLLUP_MAX_NAME_KEYWORDS);
+
+  const topItems = [...items.entries()]
+    .map(([itemCode, v]) => ({
+      itemCode,
+      itemName: v.itemName,
+      daysPresent: v.daysPresent,
+      avgRank: Math.round((v.rankSum / v.daysPresent) * 10) / 10,
+      bestRank: v.bestRank,
+    }))
+    .sort(
+      (a, b) =>
+        b.daysPresent - a.daysPresent ||
+        a.avgRank - b.avgRank ||
+        a.itemCode.localeCompare(b.itemCode),
+    )
+    .slice(0, ROLLUP_MAX_TOP_ITEMS);
+
+  return { nameKeywords, topItems };
+}
+// --- ここまで (src/lib/analysis/rollupMetrics.ts と同期) ---
+
 // src/lib/date/jst.ts と同じロジック
 const JST_DATE_KEY_FORMATTER = new Intl.DateTimeFormat("sv-SE", {
   timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit",
@@ -164,6 +270,7 @@ async function putMonthlyRollup(item) {
 async function computeRollupForGenre(genreId, month, dailyBundles) {
   const prices = [];
   const itemCodes = new Set();
+  const dailySnapshots = [];
   const highlightCounts = Object.fromEntries(HIGHLIGHT_TYPES.map((t) => [t, 0]));
   const weatherSamples = [];
 
@@ -174,6 +281,13 @@ async function computeRollupForGenre(genreId, month, dailyBundles) {
       getWeatherDaily(addDaysJst(bundle.date, -1)),
     ]);
 
+    dailySnapshots.push(
+      snapshot.map((item) => ({
+        rank: Number(item.rank),
+        itemCode: item.itemCode,
+        itemName: item.itemName,
+      })),
+    );
     for (const item of snapshot) {
       if (typeof item.price === "number") prices.push(item.price);
       if (item.itemCode) itemCodes.add(item.itemCode);
@@ -217,6 +331,8 @@ async function computeRollupForGenre(genreId, month, dailyBundles) {
       }
     : null;
 
+  const { nameKeywords, topItems } = summariseMonthlySnapshots(dailySnapshots);
+
   return {
     genreId,
     month,
@@ -225,6 +341,8 @@ async function computeRollupForGenre(genreId, month, dailyBundles) {
     uniqueItemCount: itemCodes.size,
     totalItemSlots: daysCollected * ITEMS_PER_SNAPSHOT,
     highlightCounts,
+    nameKeywords,
+    topItems,
     weather,
   };
 }
@@ -244,6 +362,16 @@ function printRollup(rollup) {
     `    ハイライト: 新規${h.NEW_ENTRY} / 急上昇${h.RANK_SURGE} / 急下降${h.RANK_DROP} / ` +
       `値下げ${h.PRICE_DROP} / 値上げ${h.PRICE_UP}`,
   );
+  const kw = rollup.nameKeywords
+    .slice(0, 8)
+    .map((k) => `${k.term}(${k.itemCount})`)
+    .join(" / ");
+  console.log(`    キーワード上位: ${kw || "(なし)"}`);
+  const top = rollup.topItems
+    .slice(0, 3)
+    .map((t) => `${t.itemName.slice(0, 16)}…(${t.daysPresent}日/avg${t.avgRank})`)
+    .join(" / ");
+  console.log(`    在籍上位: ${top || "(なし)"}`);
   if (rollup.weather) {
     console.log(
       `    気象: 平均最高${rollup.weather.avgTempMaxC}°C / 平均最低${rollup.weather.avgTempMinC}°C / ` +

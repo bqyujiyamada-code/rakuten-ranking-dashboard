@@ -9,6 +9,7 @@ import {
 } from "@/lib/db/rankingRepository";
 import type { DailyBundleItem, DiffHighlightRecord, DiffHighlightType } from "@/lib/db/types";
 import { mapWithConcurrency } from "@/lib/collectAndAnalyze";
+import { summariseMonthlySnapshots, type MonthlySnapshotRow } from "@/lib/analysis/rollupMetrics";
 
 const HIGHLIGHT_TYPES: DiffHighlightType[] = [
   "NEW_ENTRY",
@@ -55,6 +56,7 @@ export async function computeRollupForGenre(
 ) {
   const prices: number[] = [];
   const itemCodes = new Set<string>();
+  const dailySnapshots: MonthlySnapshotRow[][] = [];
   const highlightCounts = Object.fromEntries(
     HIGHLIGHT_TYPES.map((t) => [t, 0]),
   ) as Record<DiffHighlightType, number>;
@@ -67,6 +69,13 @@ export async function computeRollupForGenre(
       getWeatherDaily(addDaysJst(bundle.date, -1)),
     ]);
 
+    dailySnapshots.push(
+      snapshot.map((item) => ({
+        rank: Number(item.rank),
+        itemCode: item.itemCode,
+        itemName: item.itemName,
+      })),
+    );
     for (const item of snapshot) {
       if (typeof item.price === "number") prices.push(item.price);
       if (item.itemCode) itemCodes.add(item.itemCode);
@@ -108,6 +117,8 @@ export async function computeRollupForGenre(
       }
     : null;
 
+  const { nameKeywords, topItems } = summariseMonthlySnapshots(dailySnapshots);
+
   return {
     genreId,
     month,
@@ -116,6 +127,8 @@ export async function computeRollupForGenre(
     uniqueItemCount: itemCodes.size,
     totalItemSlots: daysCollected * ITEMS_PER_SNAPSHOT,
     highlightCounts,
+    nameKeywords,
+    topItems,
     weather,
   };
 }

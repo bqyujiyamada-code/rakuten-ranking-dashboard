@@ -41,6 +41,7 @@ src/lib/analysis/
   gemini.ts                     Geminiによるトレンド考察生成 (気象/トレンド因果分析込み)
   trendSummary.ts                Gemini Google Search groundingによる世間のトレンド要約
   monthlyRollup.ts               ジャンル×月の集計(MonthlyRollupItem)算出ロジック (cron/monthly-rollupから使用)
+  rollupMetrics.ts               月次ロールアップの商品名キーワード頻度・top30在籍商品の集計 (純粋関数、対応42.)
 src/lib/format/
   itemName.ts                   商品名冒頭の販促文言を表示用に除去 (displayItemName)
   highlight.ts                  差分ハイライトのバッジ表示用ラベル・色定義
@@ -519,7 +520,18 @@ Gemini側の高負荷(トレンド要約の504タイムアウト、後述)がま
   平均/最小/最大)、`uniqueItemCount`/`totalItemSlots`(ユニークitemCode数と全枠数。
   楽天リアルタイムランキングの総入れ替わり傾向を月単位で定量化する指標)、
   `highlightCounts`(差分ハイライトのtype別件数)、`weather`(その月の各収集日の
-  `causalDate`に対応する気象の平均・合計)。
+  `causalDate`に対応する気象の平均・合計)、`nameKeywords`(商品名から抽出した季節性
+  キーワードの頻度・上位40語、対応42.)、`topItems`(その月top30に載った商品の在籍日数
+  ランキング・上位40件、対応42.)。
+- **`nameKeywords`/`topItems`の集計ロジックは`src/lib/analysis/rollupMetrics.ts`の純粋関数
+  (`extractNameKeywords`/`summariseMonthlySnapshots`)に切り出してあり、`npm test`で
+  テスト可能(対応42.)。** キーワード抽出は形態素解析を使わない字種ベースの経験則
+  (カタカナ語・漢字連続・英数語 + 明示的な季節フレーズ + 最小限のストップワード)で、
+  厳密さより「前月比・前年同月比で意味のシフトが読める語が残ること」を優先している。
+  ストップワードにはプラットフォーム/販促ノイズ(送料無料・ポイント等)のみを入れ、
+  「ギフト」「贈答」等の贈答シーズンを示す語は**残す**こと(季節性の主要シグナルのため)。
+  この純粋関数のロジックも`scripts/compute-monthly-rollup.mjs`に複製してあるので、
+  変更時は両方直すこと(下記の「スクリプトは`src/lib`からimportせず自己完結」参照)。
 - **常に生データからフル再計算する(純粋な導出データ)。** 日次で少しずつ積み上げる
   インクリメンタル方式ではなく、`scripts/compute-monthly-rollup.mjs`を実行した時点で
   その月の生データ(GSI1のランキングスナップショット・`DiffHighlightsItem`・
@@ -695,7 +707,8 @@ npm run db:create-table # DynamoDBテーブル+GSIを作成 (既存ならスキ�
 ```
 
 **テスト(対応37.)は新規フレームワークを増やさず、Node組み込みの`node:test`を使っている。**
-対象はDB/外部APIに依存しない純粋関数のみ(`diff.ts`/`cronAlert.ts`/`format/*`/`date/jst.ts`)。
+対象はDB/外部APIに依存しない純粋関数のみ(`diff.ts`/`cronAlert.ts`/`format/*`/`date/jst.ts`/
+`analysis/rollupMetrics.ts`)。
 DB依存のロジック(`monthlyRollup.ts`等)は対象外で、実データでの動作確認はPlaywright/curl等で
 都度行う既存方針のまま。テストファイルは`*.test.ts`として対象モジュールの隣に置き、
 `.ts`拡張子付きの相対importを書く(Node ESM実行に必須。`tsconfig.json`の

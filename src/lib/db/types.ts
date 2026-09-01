@@ -123,6 +123,25 @@ export interface DailyBundleItem {
   createdAt: string;
 }
 
+/** 月次ロールアップの商品名キーワード頻度エントリ(対応42.)。字種ベースの素朴な抽出のため厳密ではない */
+export interface RollupNameKeyword {
+  term: string;
+  /** その月、その語を名前に含んだユニークitemCode数 */
+  itemCount: number;
+  /** その語が出現した延べスナップショット行数(在籍日数ぶん重複カウントされる) */
+  occurrences: number;
+}
+
+/** 月次ロールアップの top30 在籍商品エントリ(対応42.)。前月・前年同月との商品集合の突合用 */
+export interface RollupTopItem {
+  itemCode: string;
+  itemName: string;
+  /** その月のうち、その商品が top30 に載っていた収集日数 */
+  daysPresent: number;
+  avgRank: number;
+  bestRank: number;
+}
+
 /**
  * 月次ロールアップ(ジャンル×JST暦月の集計値)。季節性・長期トレンド分析の土台となる
  * 導出データで、その月の生データ(RankingSnapshotItem/DiffHighlightsItem/WeatherDailyItem)
@@ -142,6 +161,16 @@ export interface MonthlyRollupItem {
   uniqueItemCount: number;
   totalItemSlots: number;
   highlightCounts: Record<DiffHighlightType, number>;
+  /**
+   * その月の商品名から抽出した季節性キーワードの頻度(上位40語、対応42.)。前月比・前年同月比の
+   * シフトを見るための材料。形態素解析は使っておらず字種ベース抽出のため厳密ではない。
+   */
+  nameKeywords: RollupNameKeyword[];
+  /**
+   * その月に top30 へ登場した商品の在籍日数ランキング(上位40件、対応42.)。前月・前年同月との
+   * 商品集合の突合(定番化しているか / 総入れ替わりしているか)に使う。
+   */
+  topItems: RollupTopItem[];
   /** その月に対応するcausalDateの気象データが1件も無ければnull */
   weather: {
     avgTempMaxC: number;

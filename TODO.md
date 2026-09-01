@@ -852,6 +852,67 @@ Slack通知を追加した。ユーザーと合意の上、通知先はSlack Inc
 - `tsc --noEmit` / `eslint` / `npm test`(34件)はパス。本番デプロイ後、次回の自動収集
   (翌日5:00 JST)から反映される想定。
 
+### 40. トレンド要約のモデルをGA版へ切り替え (2026-08-28)
+
+**TODO.mdへの記録が漏れていたためここに追記する(詳細はCLAUDE.md「トレンド要約のモデルを
+GA版へ切り替え」節)。** ユーザー報告「世間のトレンド要約が取得できていない」の調査。
+ジャンル分析(`gemini.ts`)は16/16正常なのに、`trendSummary.ts`の`googleSearch` grounding付き
+呼び出しだけが`gemini-3-flash-preview`の慢性的高負荷で断続失敗(8/26・8/28がnull)していた。
+
+- `src/lib/analysis/trendSummary.ts`の`MODEL`を`gemini-3-flash-preview`→`gemini-3.5-flash`(GA版)に変更。
+- `TREND_HTTP_OPTIONS.timeout`を`35_000`→`45_000`に延長。`retryOptions.attempts`は2のまま。
+- `gemini.ts`(ジャンル分析)のモデルは変更なし(報告時点で正常・別スコープ)。
+- デプロイ後`/api/cron/retry`を手動で叩けば当日分を復旧できる(冪等)。
+
+### 41. トレンド要約モデルを floating alias (`gemini-flash-lite-latest`) へ (2026-08-31)
+
+**同上、記録漏れの追記(詳細はCLAUDE.md「トレンド要約モデルを floating alias へ」節)。**
+対応40.の`gemini-3.5-flash`も3日で同じ症状を再発(8/31分が collect・retry 両方で失敗、`trend: null`)。
+
+- 同時刻に複数モデルを grounding付きで並行に叩いて安定しているものを選ぶ調査手順を確立。
+  実測で`gemini-flash-lite-latest`が5/5成功・4〜6秒だったため`src/lib/analysis/trendSummary.ts`の
+  `MODEL`をこれに変更。preview版・特定GAバージョンのピン留めが3回連続で高負荷時に落ちた事実を
+  踏まえ、**あえて floating alias (`-latest`) を採用**しGoogle側のルーティングに委ねる方針に転換。
+- `TREND_HTTP_OPTIONS.timeout`を`45_000`→`30_000`に短縮。`retryOptions.attempts`は2のまま。
+- `gemini.ts`のモデルは今回も変更なし。
+
+### 42. 月次ロールアップに「商品名キーワード頻度」「top30在籍商品」を追加
+
+ユーザーと「ロールアップ集計指標が長期分析に足りているか」をレビューし、季節性・長期トレンド
+分析の材料として不足していた2指標を先に溜め始めることにした(可視化UI・専用のGemini長期分析は
+引き続き将来タスク。実データがまだ約1ヶ月分しかなく検証できないため)。
+
+- **なぜ今やらなくても実害は薄いが、やっておく**: ロールアップは生データ(スナップショット・
+  ハイライト・気象)から毎回フル再計算する設計で、テーブルにTTLも無い。よって指標を後から
+  足しても過去月に遡って埋められる。ただし「分析着手時にまとめて」より、材料の形を今決めて
+  溜め始める方が着手時の手戻りが無いと判断した。
+- **指標1: `nameKeywords`(商品名キーワード頻度、上位40語)**。このデータの季節性シグナルは
+  ほぼ商品名に出る(お中元/母の日/夏ギフト/おせち等)。月ごとの語の出現頻度が前月比・前年
+  同月比のシフトを読む材料になる。形態素解析は導入せず(依存を増やさない方針)、
+  字種ベースの素朴な抽出(カタカナ語・漢字連続・英数語)+ 明示的な季節フレーズ +
+  最小限のストップワード(プラットフォーム/販促ノイズのみ。「ギフト」「贈答」等の
+  贈答シーズン語は残す)で構成。`term`ごとに`itemCount`(その語を含むユニークitemCode数)と
+  `occurrences`(延べ出現行数)を保存。
+- **指標2: `topItems`(top30在籍商品ランキング、上位40件)**。従来の`uniqueItemCount`は
+  「今月何種類出たか」しか分からず、前月比の重複率(定番化しているか総入れ替わりか)や
+  前年同月比の突合ができなかった。`itemCode`ごとに`daysPresent`(その月top30に載っていた
+  収集日数)/`avgRank`/`bestRank`を集計し、`daysPresent`降順→`avgRank`昇順で上位40件を保存。
+- **実装**: 純粋関数を`src/lib/analysis/rollupMetrics.ts`に新設(`extractNameKeywords` /
+  `summariseMonthlySnapshots`)。`src/lib/db/types.ts`に`RollupNameKeyword` /
+  `RollupTopItem`型と`MonthlyRollupItem`への2フィールドを追加。`src/lib/analysis/monthlyRollup.ts`
+  (`/api/cron/monthly-rollup`が使う自動計算)と`scripts/compute-monthly-rollup.mjs`
+  (手動実行、src/libをimportしない自己完結の流儀のためロジックを複製・「同期させること」
+  コメント付き)の両方の`computeRollupForGenre`に組み込み。
+- **既存レコードの後方互換**: 新フィールドは非optionalにしてある(常に書き込む方針)。
+  対応36.の月次ロールアップCron(毎日12:00 JST頃、当月+前月をフル再計算)が次回実行時に
+  2026-09・2026-08分を新フィールド付きで上書きする。2026-07(3日分のみ)はCron対象外
+  (当月+前月のみ)のため、`node --env-file=.env.local scripts/compute-monthly-rollup.mjs
+  --month=2026-07 --apply`の手動実行が別途必要。
+- **動作確認**: `npm test`(rollupMetricsの新規テスト4件含む38件)/ `tsc --noEmit` / `eslint` /
+  `next build`パス。本番DynamoDBに接続し`--genre=100283`で2026-08をdry-run実行、キーワード上位が
+  「ギフト/スイーツ/ゼリー/菓子/お中元/プレゼント/内祝/洋菓子」と季節性シグナルとして
+  妥当な結果になることを確認済み。本番デプロイ・過去月のバックフィルはこれから。
+
 ## 未対応 (実運用前に必要)
 
 - [x] `iam/dynamodb-policy.json`の内容(`UpdateTable`権限+`GSI2_DailyBundle`のARN)を
