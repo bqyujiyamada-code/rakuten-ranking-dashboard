@@ -18,6 +18,17 @@ test("extractNameKeywords: 季節フレーズ・カタカナ語・漢字語を�
   assert.ok(!terms.includes("楽天"));
 });
 
+test("extractNameKeywords: 楽天のギフト設定タグ(楽ギフ_のし等)は拾わない", () => {
+  const terms = extractNameKeywords(
+    "初孫 純米大吟醸【楽ギフ_のし宛書】【楽ギフ_メッセ入力】 日本酒 ギフト",
+  );
+  assert.ok(!terms.includes("ギフ"));
+  assert.ok(!terms.includes("宛書"));
+  assert.ok(!terms.includes("メッセ"));
+  assert.ok(terms.includes("ギフト"));
+  assert.ok(terms.includes("日本酒"));
+});
+
 test("extractNameKeywords: 1字の漢字・数字始まりの断片は拾わない", () => {
   const terms = extractNameKeywords("米 5kg 2026年 詰合せ");
   assert.ok(!terms.includes("米"));

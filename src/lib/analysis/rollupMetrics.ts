@@ -59,6 +59,9 @@ const KEYWORD_STOPWORDS = new Set([
   "配送",
   "のし",
   "ラッピング",
+  "ギフ", // 楽天のギフト設定タグ「楽ギフ_のし」等の断片(下の pre-clean で大半は除去済みだが保険)
+  "メッセ",
+  "宛書",
   // 単位のみの断片(数量表記の名残でノイズになりやすい)
   "kg",
   "ml",
@@ -76,7 +79,9 @@ const TOKEN_RE = /[ァ-ヶー・]{2,}|[一-鿿々]{2,}|[A-Za-z][A-Za-z0-9]+/g;
 /** 1つの商品名から、重複を除いたキーワード集合を返す(純粋関数) */
 export function extractNameKeywords(name: string): string[] {
   const found = new Set<string>();
-  let rest = name;
+  // 楽天のギフト設定タグ(【楽ギフ_のし】【楽ギフ_のし宛書】【楽ギフ_メッセ入力】等)は
+  // 販促・システム由来のノイズなので、トークン化の前に丸ごと落とす。
+  let rest = name.replace(/楽ギフ[_＿][^\]】\s]*/g, " ");
 
   for (const phrase of SEASONAL_PHRASES) {
     if (rest.includes(phrase)) {

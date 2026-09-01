@@ -53,14 +53,14 @@ const SEASONAL_PHRASES = [
 const KEYWORD_STOPWORDS = new Set([
   "送料無料", "送料込", "ポイント", "楽天", "クーポン", "セール", "特価",
   "割引", "まとめ買い", "在庫", "予約", "数量限定", "期間限定", "ランキング",
-  "あす楽", "配送", "のし", "ラッピング",
+  "あす楽", "配送", "のし", "ラッピング", "ギフ", "メッセ", "宛書",
   "kg", "ml", "cc", "mg", "mm", "cm", "oz", "lb",
 ]);
 const TOKEN_RE = /[ァ-ヶー・]{2,}|[一-鿿々]{2,}|[A-Za-z][A-Za-z0-9]+/g;
 
 function extractNameKeywords(name) {
   const found = new Set();
-  let rest = name;
+  let rest = name.replace(/楽ギフ[_＿][^\]】\s]*/g, " ");
   for (const phrase of SEASONAL_PHRASES) {
     if (rest.includes(phrase)) {
       found.add(phrase);
