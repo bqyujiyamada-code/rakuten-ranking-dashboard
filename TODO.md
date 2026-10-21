@@ -979,8 +979,9 @@ GA版へ切り替え」節)。** ユーザー報告「世間のトレンド要�
 - [x] 対応34.の`SLACK_WEBHOOK_URL`は本番Vercel環境変数・ローカル`.env.local`とも既に
   設定済みであることを対応36.で確認済み(TODO.mdの記録漏れだった)
 - [ ] 対応38.のセキュリティ・ロジック・UIレビューで指摘されたが未対応の項目:
-  - [ ] `cronAuth.ts`が`CRON_SECRET`未設定時に無条件許可するfail-open設計。本番では
-    未設定時に401にする(fail-closed)方が安全
+  - [x] `cronAuth.ts`が`CRON_SECRET`未設定時に無条件許可するfail-open設計。本番では
+    未設定時に401にする(fail-closed)方が安全 → 2026-10-22対応。未設定時の許可は
+    `NODE_ENV=development`(`next dev`)のみに限定し、それ以外は`console.error`を出して401
   - [ ] `itemUrl`のスキーム未検証(http(s)限定にする)、セキュリティヘッダー(CSP等)未設定
   - [ ] `client.ts`の未使用関数`fetchAllTargetGenreRankings`の削除、`REQUEST_INTERVAL_MS`
     定数の重複(client.ts/collectAndAnalyze.tsの2箇所)の一本化
